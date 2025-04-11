@@ -3,23 +3,24 @@ module token_precision_analyzer #(
     parameter L = 8,
     parameter N = 1
 )(
-    input  wire                                   clk,
-    input  wire                                   rst_n,
-    input  wire                                   start,
-    output reg                                    done,
+    input                         clk,
+    input                         rst_n,
+    input                         start,
+    output logic                  done,
 
     // A_in: shape (L, N, L)
-    input  wire [DATA_WIDTH*L*N*L-1:0]            A_in,
+    input  [DATA_WIDTH*L*N*L-1:0] A_in,
     
     // One 4-bit precision code per "key token" => total L codes
-    output reg [3:0] token_precision [0:L-1],
-    output reg                                    out_valid
+    output logic [3:0]            token_precision [0:L-1],
+    output logic                  out_valid
 );
 
-    reg [DATA_WIDTH-1:0] A_arr [0:L-1][0:N-1][0:L-1];
+    logic   [DATA_WIDTH-1:0] A_arr [0:L-1][0:N-1][0:L-1];
     integer l, n_, l2;
-    reg [2:0] state;
-    localparam S_IDLE=0, S_LOAD=1, S_ANALYZE=2, S_DONE=3;
+    logic   [2:0] state;
+
+    typedef enum { S_IDLE, S_LOAD, S_ANALYZE, S_DONE } STATES;
 
     always @(posedge clk or negedge rst_n) begin
         if(!rst_n) begin
