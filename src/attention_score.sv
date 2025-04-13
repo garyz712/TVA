@@ -8,7 +8,7 @@
 // matrices and produces an attention score matrix (AA) by computing the dot
 // product between query and key vectors for each token and attention head
 //
-// Apr 10 2025    Max Zhang      create file
+// Apr 10 2025    Max Zhang      initial version
 // Apr 12 2025    Tianwei Liu    refactor into SV style
 // Apr 12 2025    Tianwei Liu    split state machine logic
 // Apr 13 2025    Tianwei Liu    add comments

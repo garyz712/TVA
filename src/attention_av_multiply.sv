@@ -8,7 +8,7 @@
 //  fixed-point or integer data with per-token precision control, producing an
 //  output matrix ZZ.
 //
-//  Apr 10 2025    Max Zhang      create file
+//  Apr 10 2025    Max Zhang      initial version
 //  Apr 11 2025    Tianwei Liu    refactor in SV
 //  Apr 11 2025    Tianwei Liu    split state machine logic
 //  Apr 11 2025    Tianwei Liu    add comments
