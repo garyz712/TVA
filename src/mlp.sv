@@ -1,171 +1,178 @@
+// File: mlp.sv
 module mlp_block #(
-    parameter DATA_WIDTH     = 16,   // e.g., FP16 or fixed-point bit width
-    parameter EMBED_DIM      = 128,  // Input/Output feature size
-    parameter HIDDEN_DIM     = 256,  // Hidden layer size
-    parameter ACTIVATION_TYPE= 0     // e.g., 0=ReLU, 1=GeLU (can define externally)
+  parameter int DATA_WIDTH = 16,
+  parameter int L = 8,
+  parameter int N = 1,
+  parameter int E = 8,
+  parameter int H = 32 // hidden dimension (commonly 4*E in Transformers)
 )(
-    input  wire                         clk,
-    input  wire                         rst_n,
-    
-    // Control signals
-    input  wire                         start,
-    output reg                          done,
-    
-    // Input vector (one token's embedding)
-    input  wire [DATA_WIDTH*EMBED_DIM-1:0]  in_vec,
-    input  wire                         in_valid,
-    
-    // Output vector
-    output reg  [DATA_WIDTH*EMBED_DIM-1:0]  out_vec,
-    output reg                          out_valid
+  input  logic                             clk,
+  input  logic                             rst_n,
+  input  logic                             start,
+  output logic                             done,
+
+  // Input: (L, N, E)
+  input  logic [DATA_WIDTH*L*N*E-1:0]      x_in,
+
+  // Weights for MLP:
+  //   W1: (E x H)
+  //   b1: (H)
+  //   W2: (H x E)
+  //   b2: (E)
+  input  logic [DATA_WIDTH*E*H-1:0]        W1_in,
+  input  logic [DATA_WIDTH*H-1:0]          b1_in,
+  input  logic [DATA_WIDTH*H*E-1:0]        W2_in,
+  input  logic [DATA_WIDTH*E-1:0]          b2_in,
+
+  // Output: (L, N, E)
+  output logic [DATA_WIDTH*L*N*E-1:0]      out_mlp,
+  output logic                             out_valid
 );
 
-    //--------------------------------------------------------------------------
-    // Internal Parameters/Variables
-    //--------------------------------------------------------------------------
-    
-    // Memory or registers for W1 and W2
-    // For demonstration, we declare arrays in RTL. In practice, you might:
-    // (a) Initialize from a file
-    // (b) Store in BRAM or external memory
-    // (c) Use partial reconfiguration if large
-    // 
-    // W1 is HIDDEN_DIM x EMBED_DIM
-    // W2 is EMBED_DIM x HIDDEN_DIM
-    
-    reg [DATA_WIDTH-1:0] W1 [0:HIDDEN_DIM-1][0:EMBED_DIM-1];
-    reg [DATA_WIDTH-1:0] b1 [0:HIDDEN_DIM-1];
-    
-    reg [DATA_WIDTH-1:0] W2 [0:EMBED_DIM-1][0:HIDDEN_DIM-1];
-    reg [DATA_WIDTH-1:0] b2 [0:EMBED_DIM-1];
+  // Internal states, arrays
+  typedef enum logic [2:0] {S_IDLE, S_LOAD, S_FC1, S_ACT, S_FC2, S_DONE} state_t;
+  state_t state;
 
-    // Buffers to hold intermediate results: the hidden layer after FC1
-    reg [DATA_WIDTH-1:0] hidden_reg [0:HIDDEN_DIM-1];
+  // Input array
+  logic [DATA_WIDTH-1:0] x_arr [0:L-1][0:N-1][0:E-1];
 
-    // State machine
-    reg [2:0] state;
-    localparam S_IDLE   = 3'd0;
-    localparam S_FC1    = 3'd1;
-    localparam S_ACT    = 3'd2;
-    localparam S_FC2    = 3'd3;
-    localparam S_DONE   = 3'd4;
+  // Weights
+  logic [DATA_WIDTH-1:0] W1 [0:E-1][0:H-1]; // row: E, col: H
+  logic [DATA_WIDTH-1:0] b1 [0:H-1];
+  logic [DATA_WIDTH-1:0] W2 [0:H-1][0:E-1]; // row: H, col: E
+  logic [DATA_WIDTH-1:0] b2 [0:E-1];
 
-    integer i, j;
-    
-    //--------------------------------------------------------------------------
-    // Load Some Dummy Weights (for Example Only)
-    //--------------------------------------------------------------------------
-    // In a real design, you’ll initialize these from an external source or memory.
-    // This always block is just to illustrate storing something in W1/W2.
-    // You should remove or replace with your actual memory initialization.
-    initial begin
-        for (i = 0; i < HIDDEN_DIM; i = i + 1) begin
-            for (j = 0; j < EMBED_DIM; j = j + 1) begin
-                W1[i][j] = {DATA_WIDTH{1'b0}};  // e.g., 0
-            end
-            b1[i] = {DATA_WIDTH{1'b0}};
-        end
-        
-        for (i = 0; i < EMBED_DIM; i = i + 1) begin
-            for (j = 0; j < HIDDEN_DIM; j = j + 1) begin
-                W2[i][j] = {DATA_WIDTH{1'b0}};
-            end
-            b2[i] = {DATA_WIDTH{1'b0}};
-        end
+  // Hidden array: shape (L, N, H)
+  logic [DATA_WIDTH-1:0] hidden [0:L-1][0:N-1][0:H-1];
+
+  // Output array: shape (L, N, E)
+  logic [DATA_WIDTH-1:0] out_arr [0:L-1][0:N-1][0:E-1];
+
+  // Unpack weight inputs into arrays
+  integer i, j;
+  always_comb begin
+    for (i=0; i<E; i++) begin
+      for (j=0; j<H; j++) begin
+        W1[i][j] = W1_in[( (i*H) + j +1 )*DATA_WIDTH -1 -: DATA_WIDTH];
+      end
+    end
+    for (j=0; j<H; j++) begin
+      b1[j] = b1_in[(j+1)*DATA_WIDTH-1 -: DATA_WIDTH];
     end
 
-    //--------------------------------------------------------------------------
-    // Finite State Machine
-    //--------------------------------------------------------------------------
-    always @(posedge clk or negedge rst_n) begin
-        if(!rst_n) begin
-            state     <= S_IDLE;
-            out_valid <= 1'b0;
-            done      <= 1'b0;
-        end else begin
-            case(state)
-                S_IDLE: begin
-                    out_valid <= 1'b0;
-                    done      <= 1'b0;
-                    if(start && in_valid) begin
-                        state <= S_FC1;
-                    end
-                end
-
-                // 1) First Fully-Connected: hidden_reg = W1 * in_vec + b1
-                S_FC1: begin
-                    // We'll do a *sequential* matrix-vector multiply, for demonstration.
-                    // If you want more speed, you can pipeline or parallelize.
-
-                    for (i = 0; i < HIDDEN_DIM; i = i + 1) begin
-                        // Initialize accumulation with bias
-                        hidden_reg[i] = b1[i];
-
-                        // Accumulate sum of multiplications
-                        for (j = 0; j < EMBED_DIM; j = j + 1) begin
-                            // Extract input
-                            reg [DATA_WIDTH-1:0] x_elt;
-                            x_elt = in_vec[(j+1)*DATA_WIDTH-1 -: DATA_WIDTH];
-
-                            // Multiply & accumulate
-                            // In reality, do proper float or fixed multiply & add
-                            hidden_reg[i] = hidden_reg[i] + (W1[i][j] * x_elt);
-                        end
-                    end
-
-                    state <= S_ACT;
-                end
-
-                // 2) Activation (e.g., ReLU)
-                S_ACT: begin
-                    // Example: ReLU, done in a single cycle (not pipelined)
-                    for (i = 0; i < HIDDEN_DIM; i = i + 1) begin
-                        if (ACTIVATION_TYPE == 0) begin
-                            // ReLU
-                            if (hidden_reg[i][DATA_WIDTH-1] == 1'b1) begin
-                                // Negative if signed. For demonstration, zero it out.
-                                hidden_reg[i] = {DATA_WIDTH{1'b0}};
-                            end
-                        end
-                        else begin
-                            // GeLU or other, not shown here. 
-                            // Implementation depends on approximate polynomials or LUTs.
-                            // hidden_reg[i] <= gelu(hidden_reg[i]);
-                        end
-                    end
-                    state <= S_FC2;
-                end
-
-                // 3) Second Fully-Connected: out_vec = W2 * hidden_reg + b2
-                S_FC2: begin
-                    // For each output dimension in EMBED_DIM
-                    for (i = 0; i < EMBED_DIM; i = i + 1) begin
-                        reg [DATA_WIDTH-1:0] sum_elt;
-                        sum_elt = b2[i];
-
-                        // Multiply & accumulate
-                        for (j = 0; j < HIDDEN_DIM; j = j + 1) begin
-                            sum_elt = sum_elt + (W2[i][j] * hidden_reg[j]);
-                        end
-
-                        // Store into out_vec
-                        out_vec[(i+1)*DATA_WIDTH-1 -: DATA_WIDTH] = sum_elt;
-                    end
-
-                    out_valid <= 1'b1;
-                    state     <= S_DONE;
-                end
-
-                S_DONE: begin
-                    done      <= 1'b1;
-                    // Optionally stay here or return to IDLE
-                    // out_valid can remain 1 for 1 cycle, etc.
-                    state     <= S_IDLE;
-                end
-
-                default: state <= S_IDLE;
-            endcase
-        end
+    for (i=0; i<H; i++) begin
+      for (j=0; j<E; j++) begin
+        W2[i][j] = W2_in[( (i*E)+ j +1 )*DATA_WIDTH -1 -: DATA_WIDTH];
+      end
     end
+    for (i=0; i<E; i++) begin
+      b2[i] = b2_in[(i+1)*DATA_WIDTH -1 -: DATA_WIDTH];
+    end
+  end
+
+  // FSM
+  always_ff @(posedge clk or negedge rst_n) begin
+    if(!rst_n) begin
+      state     <= S_IDLE;
+      done      <= 1'b0;
+      out_valid <= 1'b0;
+    end else begin
+      case(state)
+        S_IDLE: begin
+          done      <= 1'b0;
+          out_valid <= 1'b0;
+          if(start) state <= S_LOAD;
+        end
+
+        // 1) Load x_in into x_arr
+        S_LOAD: begin
+          integer l_, n_, e_;
+          for (l_ = 0; l_<L; l_++) begin
+            for (n_ = 0; n_<N; n_++) begin
+              for (e_ = 0; e_<E; e_++) begin
+                x_arr[l_][n_][e_] = x_in[
+                  ((l_*N*E)+(n_*E)+e_+1)*DATA_WIDTH -1 -: DATA_WIDTH
+                ];
+              end
+            end
+          end
+          state <= S_FC1;
+        end
+
+        // 2) FC1: hidden = x_arr * W1 + b1, shape => (L,N,H)
+        S_FC1: begin
+          integer l_, n_, h_, e_;
+          for (l_ = 0; l_<L; l_++) begin
+            for (n_ = 0; n_<N; n_++) begin
+              for (h_ = 0; h_<H; h_++) begin
+                logic [DATA_WIDTH-1:0] sum_temp;
+                sum_temp = b1[h_];
+                for (e_ = 0; e_<E; e_++) begin
+                  // sum_temp += x_arr[l_][n_][e_] * W1[e_][h_]
+                  sum_temp = sum_temp + (x_arr[l_][n_][e_] * W1[e_][h_]);
+                end
+                hidden[l_][n_][h_] = sum_temp;
+              end
+            end
+          end
+          state <= S_ACT;
+        end
+
+        // 3) Activation: ReLU on hidden
+        S_ACT: begin
+          integer l_, n_, h_;
+          for (l_ = 0; l_<L; l_++) begin
+            for (n_ = 0; n_<N; n_++) begin
+              for (h_ = 0; h_<H; h_++) begin
+                // ReLU
+                if (hidden[l_][n_][h_][DATA_WIDTH-1] == 1'b1) begin
+                  // if sign bit is 1 => negative => clamp to 0
+                  hidden[l_][n_][h_] = '0; 
+                end
+              end
+            end
+          end
+          state <= S_FC2;
+        end
+
+        // 4) FC2: out_arr = hidden * W2 + b2, shape => (L,N,E)
+        S_FC2: begin
+          integer l_, n_, e_, h_;
+          for (l_ = 0; l_<L; l_++) begin
+            for (n_ = 0; n_<N; n_++) begin
+              for (e_ = 0; e_<E; e_++) begin
+                logic [DATA_WIDTH-1:0] sum_temp;
+                sum_temp = b2[e_];
+                for (h_ = 0; h_<H; h_++) begin
+                  sum_temp = sum_temp + (hidden[l_][n_][h_] * W2[h_][e_]);
+                end
+                out_arr[l_][n_][e_] = sum_temp;
+              end
+            end
+          end
+          state <= S_DONE;
+        end
+
+        S_DONE: begin
+          // Pack out_arr into out_mlp
+          integer l_, n_, e_;
+          for (l_ = 0; l_<L; l_++) begin
+            for (n_ = 0; n_<N; n_++) begin
+              for (e_ = 0; e_<E; e_++) begin
+                out_mlp[
+                  ((l_*N*E)+(n_*E)+ e_ +1)*DATA_WIDTH -1 -: DATA_WIDTH
+                ] = out_arr[l_][n_][e_];
+              end
+            end
+          end
+          out_valid <= 1'b1;
+          done      <= 1'b1;
+          state     <= S_IDLE;
+        end
+
+        default: state <= S_IDLE;
+      endcase
+    end
+  end
 
 endmodule
