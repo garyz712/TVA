@@ -46,16 +46,16 @@ module positional_encoding #(
     // This ROM is assumed asynchronous (pos_val updates combinationally).
     logic [DATA_WIDTH-1:0] pos_val;
     positional_encoding_rom_fp16 #(
-      .DATA_WIDTH (DATA_WIDTH),
-      .NUM_TOKENS (NUM_TOKENS),
-      .E          (E),
-      .MEMFILE    ("pos_embed_fp16.mem")
+        .DATA_WIDTH (DATA_WIDTH),
+        .NUM_TOKENS (NUM_TOKENS),
+        .E          (E),
+        .MEMFILE    ("pos_embed_fp16.mem")
     ) u_posrom (
-      .clk        (clk),
-      .rst_n      (rst_n),
-      .token_idx  (token_idx),
-      .dim        (dim_e),
-      .pos_val    (pos_val)
+        .clk        (clk),
+        .rst_n      (rst_n),
+        .token_idx  (token_idx),
+        .dim        (dim_e),
+        .pos_val    (pos_val)
     );
 
     //-------------------------------------------------------------------------
@@ -73,21 +73,21 @@ module positional_encoding #(
     // 5) FSM: state register
     //-------------------------------------------------------------------------
     always_ff @(posedge clk or negedge rst_n) begin
-      if (!rst_n) curr_state <= S_IDLE;
-      else         curr_state <= next_state;
+        if (!rst_n) curr_state <= S_IDLE;
+        else         curr_state <= next_state;
     end
 
     //-------------------------------------------------------------------------
     // 6) FSM: next‑state logic
     //-------------------------------------------------------------------------
     always_comb begin
-      next_state = curr_state;
-      case (curr_state)
-        S_IDLE: next_state = start ? S_ADD  : S_IDLE;
-        S_ADD:  next_state = (token_idx == NUM_TOKENS-1 && dim_e == E-1)
-                             ? S_DONE : S_ADD;
-        S_DONE: next_state = S_IDLE;
-      endcase
+        next_state = curr_state;
+        case (curr_state)
+            S_IDLE: next_state = start ? S_ADD  : S_IDLE;
+            S_ADD:  next_state = (token_idx == NUM_TOKENS-1 && dim_e == E-1)
+                                 ? S_DONE : S_ADD;
+            S_DONE: next_state = S_IDLE;
+        endcase
     end
 
     //-------------------------------------------------------------------------
@@ -96,50 +96,50 @@ module positional_encoding #(
     // flatten out_mem → out_embed in DONE state
     integer i,j;
     always_ff @(posedge clk or negedge rst_n) begin
-      if (!rst_n) begin
-        done      <= 1'b0;
-        out_valid <= 1'b0;
-        token_idx <= '0;
-        dim_e     <= '0;
-        for (i=0; i<NUM_TOKENS; i++)
-          for (j=0; j<E; j++)
-            out_mem[i][j] <= '0;
-      end else begin
-        // default deassert
-        done      <= 1'b0;
-        out_valid <= 1'b0;
-
-        case (curr_state)
-          S_IDLE: begin
-            token_idx <= 0;
-            dim_e     <= 0;
-          end
-
-          S_ADD: begin
-            // read embed + rom
-            logic [DATA_WIDTH-1:0] a = get_embed(token_idx, dim_e);
-            out_mem[token_idx][dim_e] <= a + pos_val;
-
-            // advance counters
-            if (dim_e < E-1)      dim_e     <= dim_e + 1;
-            else begin
-              dim_e     <= 0;
-              if (token_idx < NUM_TOKENS-1)
-                token_idx <= token_idx + 1;
-            end
-          end
-
-          S_DONE: begin
-            done      <= 1'b1;
-            out_valid <= 1'b1;
-            // flatten
+        if (!rst_n) begin
+            done      <= 1'b0;
+            out_valid <= 1'b0;
+            token_idx <= '0;
+            dim_e     <= '0;
             for (i=0; i<NUM_TOKENS; i++)
-              for (j=0; j<E; j++)
-                out_embed[((i*E + j)+1)*DATA_WIDTH -1 -: DATA_WIDTH]
-                  <= out_mem[i][j];
-          end
-        endcase
-      end
+                for (j=0; j<E; j++)
+                  out_mem[i][j] <= '0;
+        end else begin
+            // default deassert
+            done      <= 1'b0;
+            out_valid <= 1'b0;
+
+            case (curr_state)
+                S_IDLE: begin
+                    token_idx <= 0;
+                    dim_e     <= 0;
+                end
+
+                S_ADD: begin
+                    // read embed + rom
+                    logic [DATA_WIDTH-1:0] a = get_embed(token_idx, dim_e);
+                    out_mem[token_idx][dim_e] <= a + pos_val;
+
+                    // advance counters
+                    if (dim_e < E-1)      dim_e     <= dim_e + 1;
+                    else begin
+                        dim_e     <= 0;
+                        if (token_idx < NUM_TOKENS-1)
+                            token_idx <= token_idx + 1;
+                    end
+                end
+
+                S_DONE: begin
+                    done      <= 1'b1;
+                    out_valid <= 1'b1;
+                    // flatten
+                    for (i=0; i<NUM_TOKENS; i++)
+                        for (j=0; j<E; j++)
+                            out_embed[((i*E + j)+1)*DATA_WIDTH -1 -: DATA_WIDTH]
+                                <= out_mem[i][j];
+                end
+            endcase
+        end
     end
 
 endmodule
