@@ -65,8 +65,7 @@ module positional_encoding #(
         input logic [$clog2(NUM_TOKENS)-1:0] t,
         input logic [$clog2(E)-1:0]          d
     );
-        int idx = t*E + d;
-        get_embed = A_in[(idx+1)*DATA_WIDTH -1 -: DATA_WIDTH];
+        get_embed = A_in[(t*E + d+1)*DATA_WIDTH -1 -: DATA_WIDTH];
     endfunction
 
     //-------------------------------------------------------------------------
@@ -83,9 +82,18 @@ module positional_encoding #(
     always_comb begin
         next_state = curr_state;
         case (curr_state)
-            S_IDLE: next_state = start ? S_ADD  : S_IDLE;
-            S_ADD:  next_state = (token_idx == NUM_TOKENS-1 && dim_e == E-1)
-                                 ? S_DONE : S_ADD;
+            S_IDLE: begin
+                if (start)
+                    next_state = S_ADD;
+                else
+                    next_state = S_IDLE;
+            end
+            S_ADD: begin
+                if (token_idx == NUM_TOKENS-1 && dim_e == E-1)
+                    next_state = S_DONE;
+                else
+                    next_state = S_ADD;
+            end
             S_DONE: next_state = S_IDLE;
         endcase
     end
@@ -117,13 +125,13 @@ module positional_encoding #(
 
                 S_ADD: begin
                     // read embed + rom
-                    logic [DATA_WIDTH-1:0] a = get_embed(token_idx, dim_e);
-                    out_mem[token_idx][dim_e] <= a + pos_val;
+                    out_mem[token_idx][dim_e] <= get_embed(token_idx, dim_e) + pos_val;
 
                     // advance counters
-                    if (dim_e < E-1)      dim_e     <= dim_e + 1;
+                    if (dim_e < E-1)
+                        dim_e <= dim_e + 1;
                     else begin
-                        dim_e     <= 0;
+                        dim_e <= 0;
                         if (token_idx < NUM_TOKENS-1)
                             token_idx <= token_idx + 1;
                     end
