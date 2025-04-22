@@ -1,7 +1,8 @@
 //-----------------------------------------------------------------------------
 // positional_encoding.sv
-//    Time‑multiplexed positional embedding addition using a pre‑computed
-//    FP16 sin/cos ROM.  out_embed = A_in + PosROM[token_idx,dim_e].
+//    Time-multiplexed positional embedding addition using a pre-computed
+//    FP16 sin/cos ROM. out_embed = A_in + PosROM[token_idx,dim_e].
+//    ROM is synchronous (updates on clock edge).
 //-----------------------------------------------------------------------------
 module positional_encoding #(
     parameter int DATA_WIDTH  = 16,
@@ -36,14 +37,14 @@ module positional_encoding #(
     //-------------------------------------------------------------------------
     // 2) Counters & Local RAM for Result
     //-------------------------------------------------------------------------
-    logic [$clog2(NUM_TOKENS)-1:0] token_idx;
-    logic [$clog2(E)-1:0]          dim_e;
+    logic [$clog2(NUM_TOKENS)-1:0] token_idx, token_idx_dly;
+    logic [$clog2(E)-1:0]          dim_e, dim_e_dly;
     logic [DATA_WIDTH-1:0]         out_mem [0:NUM_TOKENS-1][0:E-1];
 
     //-------------------------------------------------------------------------
     // 3) Instantiate the ROM
     //-------------------------------------------------------------------------
-    // This ROM is assumed asynchronous (pos_val updates combinationally).
+    // ROM is synchronous (pos_val updates on clock edge).
     logic [DATA_WIDTH-1:0] pos_val;
     positional_encoding_rom_fp16 #(
         .DATA_WIDTH (DATA_WIDTH),
@@ -77,7 +78,7 @@ module positional_encoding #(
     end
 
     //-------------------------------------------------------------------------
-    // 6) FSM: next‑state logic
+    // 6) FSM: next-state logic
     //-------------------------------------------------------------------------
     always_comb begin
         next_state = curr_state;
@@ -89,7 +90,7 @@ module positional_encoding #(
                     next_state = S_IDLE;
             end
             S_ADD: begin
-                if (token_idx == NUM_TOKENS-1 && dim_e == E-1)
+                if (token_idx_dly == NUM_TOKENS-1 && dim_e_dly == E-1)
                     next_state = S_DONE;
                 else
                     next_state = S_ADD;
@@ -101,33 +102,43 @@ module positional_encoding #(
     //-------------------------------------------------------------------------
     // 7) FSM: outputs & datapath
     //-------------------------------------------------------------------------
-    // flatten out_mem → out_embed in DONE state
-    integer i,j;
+    // Flatten out_mem → out_embed in DONE state
+    integer i, j;
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            done      <= 1'b0;
-            out_valid <= 1'b0;
-            token_idx <= '0;
-            dim_e     <= '0;
+            done          <= 1'b0;
+            out_valid     <= 1'b0;
+            token_idx     <= '0;
+            dim_e         <= '0;
+            token_idx_dly <= '0;
+            dim_e_dly     <= '0;
             for (i=0; i<NUM_TOKENS; i++)
                 for (j=0; j<E; j++)
-                  out_mem[i][j] <= '0;
+                    out_mem[i][j] <= '0;
         end else begin
-            // default deassert
+            // Default deassert
             done      <= 1'b0;
             out_valid <= 1'b0;
 
             case (curr_state)
                 S_IDLE: begin
-                    token_idx <= 0;
-                    dim_e     <= 0;
+                    token_idx     <= 0;
+                    dim_e         <= 0;
+                    token_idx_dly <= 0;
+                    dim_e_dly     <= 0;
                 end
 
                 S_ADD: begin
-                    // read embed + rom
-                    out_mem[token_idx][dim_e] <= get_embed(token_idx, dim_e) + pos_val;
+                    // Delay indices to align with ROM output
+                    token_idx_dly <= token_idx;
+                    dim_e_dly     <= dim_e;
 
-                    // advance counters
+                    // Perform addition using delayed indices (when pos_val is valid)
+                    if (token_idx_dly < NUM_TOKENS && dim_e_dly < E) begin
+                        out_mem[token_idx_dly][dim_e_dly] <= get_embed(token_idx_dly, dim_e_dly) + pos_val;
+                    end
+
+                    // Advance counters
                     if (dim_e < E-1)
                         dim_e <= dim_e + 1;
                     else begin
@@ -140,7 +151,7 @@ module positional_encoding #(
                 S_DONE: begin
                     done      <= 1'b1;
                     out_valid <= 1'b1;
-                    // flatten
+                    // Flatten
                     for (i=0; i<NUM_TOKENS; i++)
                         for (j=0; j<E; j++)
                             out_embed[((i*E + j)+1)*DATA_WIDTH -1 -: DATA_WIDTH]
