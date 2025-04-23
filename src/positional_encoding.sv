@@ -21,7 +21,7 @@ module positional_encoding #(
 
     // Output = A_in + pos_val_ROM, shape (NUM_TOKENS, E)
     output logic [DATA_WIDTH*NUM_TOKENS*E -1:0]        out_embed,
-    output logic                                      out_valid
+    output logic                                       out_valid
 );
 
     //-------------------------------------------------------------------------
