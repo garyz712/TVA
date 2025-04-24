@@ -1,2 +1,4 @@
 *.out
-scripts/*.mem
+*.mem
+*.xml
+sim_build/
