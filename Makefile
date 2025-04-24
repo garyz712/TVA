@@ -16,6 +16,18 @@ all:
 %:
 	$(MAKE) sim TOPLEVEL=$@ MODULE=test_$@
 
+
+compile:
+	@if [ -z "$(VERILOG_SOURCES)" ]; then \
+		echo "Error: No .sv files found in $(SRC_DIR)"; \
+		exit 1; \
+	fi
+	@for src in $(VERILOG_SOURCES); do \
+		module_name=$$(basename $$src .sv); \
+		echo "Compiling $$module_name"; \
+		$(MAKE) -f $(shell cocotb-config --makefiles)/Makefile.sim VERILOG_SOURCES=$$src; \
+	done
+
 # Simulation target
 sim:
 	$(MAKE) -f $(shell cocotb-config --makefiles)/Makefile.sim
