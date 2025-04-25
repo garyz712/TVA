@@ -14,7 +14,7 @@ all:
 
 # Dynamic target for module testing
 %:
-	$(MAKE) sim TOPLEVEL=$@ MODULE=test_$@
+	$(MAKE) sim TOPLEVEL=$@ MODULE=test_$@ VERILOG_SOURCES=src/$@.sv
 
 
 compile:

@@ -8,13 +8,13 @@
 //
 //------------------------------------------------------------------------------
 module patch_embedding #(
-    parameter int DATA_WIDTH  = 16,  // e.g., 16 bits per pixel or intermediate
-    parameter int IMG_H       = 224,
-    parameter int IMG_W       = 224,
+    parameter int DATA_WIDTH  = 4,  // e.g., 16 bits per pixel or intermediate
+    parameter int IMG_H       = 32,
+    parameter int IMG_W       = 32,
     parameter int C           = 3,   // input channels
     parameter int PH          = 16,  // patch height
     parameter int PW          = 16,  // patch width
-    parameter int E           = 128  // embedding dimension
+    parameter int E           = 8  // embedding dimension
 )(
     input  logic                                          clk,
     input  logic                                          rst_n,
