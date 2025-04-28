@@ -1,3 +1,19 @@
+//------------------------------------------------------------------------------
+// token_precision_analyzer.sv
+//
+// precision_assigner
+// This module analyzes a flattened 3D attention matrix A_in of shape (L, N, L)
+// and assigns a 4-bit precision code to each token (along the last dimension L).
+// It sums values across the batch (N) and input sequence (L) dimensions for
+// each token, then determines a precision level based on thresholding the sum.
+//
+// The output is an array of 4-bit precision codes, one per token.
+// The operation is driven by a start signal and signals completion via a done output.
+// An internal FSM manages the steps: summing elements, thresholding sums, and updating outputs.
+//
+// Apr. 21 2025    Max Zhang      Initial version
+// Apr. 26 2025    Tianwei Liu    Syntax fix and comments
+//------------------------------------------------------------------------------
 module precision_assigner #(
     parameter int DATA_WIDTH = 16,  // e.g. 16 bits per A element
     parameter int L = 8,           // number of tokens in the last dimension
@@ -122,7 +138,6 @@ module precision_assigner #(
     // We'll handle summation in S_SUM_COL. 
     // We'll handle threshold in S_DECIDE.
     // We'll output `done` and fill `token_precision` array at S_DONE.
-    integer i;
     always_ff @(posedge clk or negedge rst_n) begin
         if(!rst_n) begin
             done      <= 1'b0;
@@ -131,7 +146,7 @@ module precision_assigner #(
             sum_temp  <= 32'd0;
 
             // Initialize token_prec_array
-            for(i=0; i<TOT_COLS; i++) token_prec_array[i] <= 4'd0;
+            for(int i=0; i<TOT_COLS; i++) token_prec_array[i] <= 4'd0;
 
         end else begin
             // Defaults each cycle

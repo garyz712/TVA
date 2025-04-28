@@ -1,6 +1,8 @@
 //-----------------------------------------------------------------------------
 // File: weight_loader.sv
 // Purpose: Burst‐read a block of model weights from AXI4 into on‐chip BRAM.
+//
+// Apr. 22 2025    Max Zhang    Initial version
 //-----------------------------------------------------------------------------
 
 module weight_loader #(

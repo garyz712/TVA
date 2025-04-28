@@ -1,8 +1,11 @@
 //-----------------------------------------------------------------------------
 // positional_encoding.sv
-//    Time-multiplexed positional embedding addition using a pre-computed
-//    FP16 sin/cos ROM. out_embed = A_in + PosROM[token_idx,dim_e].
-//    ROM is synchronous (updates on clock edge).
+// Time-multiplexed positional embedding addition using a pre-computed
+// FP16 sin/cos ROM. out_embed = A_in + PosROM[token_idx,dim_e].
+// ROM is synchronous (updates on clock edge).
+//
+// Apr. 15 2025    Max Zhang      Initial version
+// Apr. 20 2025    Tianwei Liu    Synchronous ROM read
 //-----------------------------------------------------------------------------
 module positional_encoding #(
     parameter int DATA_WIDTH  = 16,

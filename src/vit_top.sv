@@ -1,3 +1,20 @@
+//------------------------------------------------------------------------------
+// vit_top.sv
+//
+// Top-level SystemVerilog module for Vision Transformer inference.
+// Implements a minimal ViT architecture using the following pipeline:
+//     - Patch Embedding
+//     - Positional Encoding
+//     - Stacked Transformer Encoder Blocks (time-multiplexed)
+//     - Classification Head
+// Supports external loading of all trained weights and positional tables.
+//     - Time-multiplexes a single encoder block across NUM_LAYERS passes.
+//     - Designed for simple pipeline control via internal FSM.
+//     - Requires weight input or pre-storage mechanism for full model.
+//
+// Apr. 16 2025    Max Zhang      Initial version
+// Apr. 21 2025    Tianwei Liu    Syntax fix and comments
+//------------------------------------------------------------------------------
 module vit_top #(
     parameter int DATA_WIDTH   = 16,
     parameter int IMG_H        = 224,

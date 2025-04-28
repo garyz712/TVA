@@ -6,6 +6,9 @@
 // from the input image is linearly projected into an E-dimensional embedding
 // space using learned weights (W_patch) and biases (b_patch).
 //
+// Apr. 15 2025    Max Zhang      Initial version
+// Apr. 21 2025    Tianwei Liu    Syntax fix and comments
+// Apr. 25 2025    Tianwei Liu    Changed default parameter
 //------------------------------------------------------------------------------
 module patch_embedding #(
     parameter int DATA_WIDTH  = 4,  // e.g., 16 bits per pixel or intermediate

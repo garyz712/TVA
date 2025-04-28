@@ -6,6 +6,7 @@
 // into pos_embed_fp16.mem
 // for synthesize, need some other way to load into initial RAM
 //
+// Apr. 15 2025    Max Zhang      Initial version
 //-----------------------------------------------------------------------------
 
 module positional_encoding_rom_fp16 #(
