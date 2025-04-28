@@ -1,5 +1,5 @@
 //------------------------------------------------------------------------------
-// token_precision_analyzer.sv
+// precision_assigner.sv
 //
 // precision_assigner
 // This module analyzes a flattened 3D attention matrix A_in of shape (L, N, L)
@@ -13,6 +13,7 @@
 //
 // Apr. 21 2025    Max Zhang      Initial version
 // Apr. 26 2025    Tianwei Liu    Syntax fix and comments
+// Apr. 28 2025    Tianwei Liu    Fix bug
 //------------------------------------------------------------------------------
 module precision_assigner #(
     parameter int DATA_WIDTH = 16,  // e.g. 16 bits per A element
