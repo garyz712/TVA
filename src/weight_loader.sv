@@ -2,7 +2,8 @@
 // File: weight_loader.sv
 // Purpose: Burst‐read a block of model weights from AXI4 into on‐chip BRAM.
 //
-// Apr. 22 2025    Max Zhang    Initial version
+// Apr. 22 2025    Max Zhang      Initial version
+// Apr. 28 2025    Tianwei Liu    Syntax
 //-----------------------------------------------------------------------------
 
 module weight_loader #(
@@ -71,10 +72,21 @@ module weight_loader #(
     always_comb begin
         next_state = curr_state;
         case (curr_state)
-            IDLE: if (start)         next_state = ADDR;
-            ADDR: if (arvalid && arready) next_state = READ;
-            READ: if (rvalid)        next_state = (mem_index == MEM_DEPTH-1) ? DONE : ADDR;
-            DONE:                     next_state = IDLE;
+            IDLE: 
+                if (start)
+                    next_state = ADDR;
+            ADDR:
+                if (arvalid && arready)
+                    next_state = READ;
+            READ:
+                if (rvalid) begin
+                    if (mem_index == MEM_DEPTH-1)
+                        next_state = DONE;
+                    else
+                        next_state = ADDR;
+                end  
+            DONE:
+                next_state = IDLE;
         endcase
     end
 
