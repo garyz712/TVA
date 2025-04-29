@@ -12,6 +12,8 @@
 //  Apr 11 2025    Tianwei Liu    refactor in SV
 //  Apr 11 2025    Tianwei Liu    split state machine logic
 //  Apr 11 2025    Tianwei Liu    add comments
+//  Apr 28 2025    Max Zhang      Bug fixes
+//  Apr 29 2025    Tianwei Liu    Use FP16 multiplier
 //------------------------------------------------------------------------------
 
 // IO Description
@@ -81,6 +83,16 @@ module attention_av_multiply #(
 
     // Counter for MUL state to iterate over l2
     logic [$clog2(L)-1:0] l2_cnt;
+
+    logic [15:0] fp16_A, fp16_B, fp16_product;
+
+
+    fp16_mul fp16_multiplier_inst (
+        .A(fp16_A),
+        .B(fp16_B),
+        .result(fp16_product)
+    );
+
 
     // Sequential logic for state and control signals
     always_ff @(posedge clk or negedge rst_n) begin
@@ -197,7 +209,16 @@ module attention_av_multiply #(
                         endcase
                         
                         // Multiply and scale for Q1.3/Q1.7
-                        product = valA_down * valV_down;
+                        if (token_precision[l2_cnt] == 4'd2) begin
+                            // FP16 mode - use fp16 multiplier
+                            fp16_A <= A_arr[l][n_][l2_cnt];
+                            fp16_B <= V_arr[l2_cnt][n_][e_];
+                            product = fp16_product;
+                        end else begin
+                            // Integer downcast multiply
+                            product = valA_down * valV_down;
+                        end
+
                         case (token_precision[l2_cnt])
                             4'd0: // INT4 (Q1.3): divide by 2^6
                                 Z_arr[l][n_][e_] <= Z_arr[l][n_][e_] + (product >> 6);
