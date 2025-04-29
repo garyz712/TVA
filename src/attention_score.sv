@@ -2,46 +2,15 @@
 // attention_score.sv
 //
 // attention_score
-// This module computes the attention scores (or attention weights) in a
-// transformer model's self-attention mechanism, specifically the dot-product
-// attention before the softmax operation. It takes query (QQ) and key (KK)
-// matrices and produces an attention score matrix (AA) by computing the dot
-// product between query and key vectors for each token and attention head
+// This module computes the attention scores in a transformer model's self-attention
+// mechanism using signed arithmetic, correct input/output indexing, and fixed timing.
 //
 // Apr 10 2025    Max Zhang      initial version
 // Apr 12 2025    Tianwei Liu    refactor into SV style
 // Apr 12 2025    Tianwei Liu    split state machine logic
 // Apr 13 2025    Tianwei Liu    add comments
+// Apr 28 2025    Tianwei Liu    fix dot product computation bug
 //------------------------------------------------------------------------------
-
-// IO Description
-//
-// Parameters:
-//
-//     DATA_WIDTH (default: 16): Bit width of each element in QQ, KK, and AA.
-//         Determines precision (e.g., 16-bit fixed-point or integer).
-//     L (default: 8): Sequence length (number of tokens).
-//     N (default: 1): Number of attention heads.
-//     E (default: 8): Embedding dimension per head.
-//
-// Inputs:
-//
-//     clk: Clock signal for synchronous operation.
-//     rst_n: Active-low asynchronous reset to initialize the module.
-//     start: Control signal to trigger computation.
-//     Q_in [DATA_WIDTH*L*N*E-1:0]: Flattened query matrix QQ of shape
-//         (L,N,E)(L,N,E), containing L×N×EL×N×E elements, each DATA_WIDTH bits.
-//         Represents query vectors for each token and head.
-//     K_in [DATA_WIDTH*L*N*E-1:0]: Flattened key matrix KK, same shape as QQ.
-//         Represents key vectors for each token and head.
-//
-// Outputs:
-//
-//     done: Control signal indicating computation completion.
-//     A_out [DATA_WIDTH*L*N*L-1:0]: Flattened attention score matrix AA of
-//         shape (L,N,L)(L,N,L), containing L×N×LL×N×L elements, each DATA_WIDTH
-//         bits. Represents unnormalized attention scores.
-//     out_valid: Indicates valid data on A_out.
 
 module attention_score #(
     parameter int DATA_WIDTH = 16,
@@ -59,12 +28,15 @@ module attention_score #(
     input  logic [DATA_WIDTH*L*N*E-1:0] K_in,
     // Output: A of shape (L, N, L)
     output logic [DATA_WIDTH*L*N*L-1:0] A_out,
-    output logic                        out_valid //FIXME: WHY???
+    output logic                        out_valid
 );
     // Internal arrays using packed dimensions for synthesis
-    logic [DATA_WIDTH-1:0] Q [L-1:0][N-1:0][E-1:0];
-    logic [DATA_WIDTH-1:0] K [L-1:0][N-1:0][E-1:0];
-    logic [DATA_WIDTH-1:0] A [L-1:0][N-1:0][L-1:0];
+    logic signed [DATA_WIDTH-1:0] Q [L-1:0][N-1:0][E-1:0];
+    logic signed [DATA_WIDTH-1:0] K [L-1:0][N-1:0][E-1:0];
+    logic signed [DATA_WIDTH-1:0] A [L-1:0][N-1:0][L-1:0];
+
+    // Temporary sum for dot product (wider to avoid overflow)
+    logic signed [2*DATA_WIDTH-1:0] sum_temp [L-1:0][N-1:0][L-1:0];
 
     // State machine encoding
     typedef enum logic [1:0] {
@@ -78,9 +50,6 @@ module attention_score #(
     // Counters for computation
     logic [$clog2(L)-1:0] l_cnt, l2_cnt;
     logic [$clog2(E)-1:0] e_cnt;
-
-    // Temporary sum for dot product
-    logic [DATA_WIDTH-1:0] sum_temp [L-1:0][N-1:0][L-1:0];
 
     // Sequential logic for state and control
     always_ff @(posedge clk or negedge rst_n) begin
@@ -107,6 +76,7 @@ module attention_score #(
                     e_cnt <= '0;
                 end
                 S_COMPUTE: begin
+                    e_cnt <= e_cnt + 1;
                     if (e_cnt == E-1) begin
                         e_cnt <= '0;
                         if (l2_cnt == L-1) begin
@@ -119,8 +89,6 @@ module attention_score #(
                         end else begin
                             l2_cnt <= l2_cnt + 1;
                         end
-                    end else begin
-                        e_cnt <= e_cnt + 1;
                     end
                 end
                 S_DONE: begin
@@ -161,12 +129,12 @@ module attention_score #(
     // Load inputs into arrays
     always_ff @(posedge clk) begin
         if (state == S_LOAD) begin
-            // Unpack Q_in and K_in
+            // Unpack Q_in and K_in with reversed e_ index
             for (int l = 0; l < L; l++) begin
                 for (int n_ = 0; n_ < N; n_++) begin
                     for (int e_ = 0; e_ < E; e_++) begin
-                        Q[l][n_][e_] <= Q_in[((l*N*E)+(n_*E)+e_)*DATA_WIDTH +: DATA_WIDTH];
-                        K[l][n_][e_] <= K_in[((l*N*E)+(n_*E)+e_)*DATA_WIDTH +: DATA_WIDTH];
+                        Q[l][n_][e_] <= Q_in[((l*N*E)+(n_*E)+(E-1-e_))*DATA_WIDTH +: DATA_WIDTH];
+                        K[l][n_][e_] <= K_in[((l*N*E)+(n_*E)+(E-1-e_))*DATA_WIDTH +: DATA_WIDTH];
                     end
                 end
             end
@@ -185,24 +153,27 @@ module attention_score #(
     always_ff @(posedge clk) begin
         if (state == S_COMPUTE) begin
             for (int n_ = 0; n_ < N; n_++) begin
-                // Compute one term of the dot product: Q[l][n][e] * K[l2][n][e]
-                sum_temp[l_cnt][n_][l2_cnt] <= sum_temp[l_cnt][n_][l2_cnt] + 
-                                               (Q[l_cnt][n_][e_cnt] * K[l2_cnt][n_][e_cnt]);
-                // Store result in A when computation is complete for each [l, n, l2]
+                // Compute one term of the dot product
+                logic signed [2*DATA_WIDTH-1:0] next_sum;
+                next_sum = sum_temp[l_cnt][n_][l2_cnt] + 
+                           (Q[l_cnt][n_][e_cnt] * K[l2_cnt][n_][e_cnt]);
+                sum_temp[l_cnt][n_][l2_cnt] <= next_sum;
+                // Store result and reset sum_temp when dot product is complete
                 if (e_cnt == E-1) begin
-                    A[l_cnt][n_][l2_cnt] <= sum_temp[l_cnt][n_][l2_cnt]; // Optional: scale by 1/sqrt(E) here
+                    A[l_cnt][n_][l2_cnt] <= next_sum[DATA_WIDTH-1:0]; // Use updated sum
+                    sum_temp[l_cnt][n_][l2_cnt] <= '0;
                 end
             end
         end
     end
 
-    // Pack output
+    // Pack output with reversed l and l2 indices
     always_ff @(posedge clk) begin
         if (state == S_DONE) begin
             for (int l = 0; l < L; l++) begin
                 for (int n_ = 0; n_ < N; n_++) begin
                     for (int l2 = 0; l2 < L; l2++) begin
-                        A_out[((l*N*L)+(n_*L)+l2)*DATA_WIDTH +: DATA_WIDTH] <= A[l][n_][l2];
+                        A_out[(((L-1-l)*N*L)+(n_*L)+(L-1-l2))*DATA_WIDTH +: DATA_WIDTH] <= A[l][n_][l2];
                     end
                 end
             end
