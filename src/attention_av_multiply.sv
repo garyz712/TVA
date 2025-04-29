@@ -57,7 +57,7 @@ module attention_av_multiply #(
     input  logic [3:0]                  token_precision [L-1:0],
     // Output Z: shape (L, N, E)
     output logic [DATA_WIDTH*L*N*E-1:0] Z_out,
-    output logic                        out_valid //FIXME: WHY???
+    output logic                        out_valid
 );
     // Use SystemVerilog packed arrays for synthesis clarity
     logic [DATA_WIDTH-1:0] A_arr [L-1:0][N-1:0][L-1:0];
@@ -76,6 +76,7 @@ module attention_av_multiply #(
     // Internal signals for accumulation
     logic [DATA_WIDTH-1:0] Z_temp [L-1:0][N-1:0][E-1:0];
     logic [DATA_WIDTH-1:0] product;
+    logic [DATA_WIDTH-1:0] valA_down;
     logic [DATA_WIDTH-1:0] valV_down;
 
     // Counter for MUL state to iterate over l2
@@ -175,23 +176,29 @@ module attention_av_multiply #(
             for (int l = 0; l < L; l++) begin
                 for (int n_ = 0; n_ < N; n_++) begin
                     for (int e_ = 0; e_ < E; e_++) begin
-                        // Downcast V based on precision code
+                        // Downcast A, V based on precision code
                         case (token_precision[l2_cnt])
-                            4'd0: begin // INT4
+                            4'd0: begin // INT4 (Q1.3 format)
+                                valA_down = {{(DATA_WIDTH-4){1'b0}}, A_arr[l][n_][l2_cnt][3:0]};
                                 valV_down = {{(DATA_WIDTH-4){1'b0}}, V_arr[l2_cnt][n_][e_][3:0]};
                             end
-                            4'd1: begin // INT8
+                            4'd1: begin // INT8 (Q1.7 format)
+                                valA_down = {{(DATA_WIDTH-8){1'b0}}, A_arr[l][n_][l2_cnt][7:0]};
                                 valV_down = {{(DATA_WIDTH-8){1'b0}}, V_arr[l2_cnt][n_][e_][7:0]};
                             end
-                            4'd2: begin // FP16 or full
+                            4'd2: begin // FP16
+                                valA_down = A_arr[l][n_][l2_cnt];
                                 valV_down = V_arr[l2_cnt][n_][e_];
                             end
-                            default: begin // FP16 or full
+                            default: begin // FP16
+                                valA_down = A_arr[l][n_][l2_cnt];
                                 valV_down = V_arr[l2_cnt][n_][e_];
                             end
                         endcase
-                        // Multiply and accumulate
-                        product = A_arr[l][n_][l2_cnt] * valV_down;
+
+                        // Multiply in lower precision, upcast product to FP16 automatically
+                        product = valA_down * valV_down;
+                        // Accumulation in FP16
                         Z_arr[l][n_][e_] <= Z_arr[l][n_][e_] + product;
                     end
                 end
