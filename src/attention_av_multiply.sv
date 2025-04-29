@@ -101,7 +101,7 @@ module attention_av_multiply #(
                     l2_cnt <= '0;
                 end
                 S_MUL: begin
-                    if (l2_cnt == L-1) begin
+                    if (l2_cnt == ($clog2(L)'(L-1))) begin
                         l2_cnt <= '0;
                     end else begin
                         l2_cnt <= l2_cnt + 1;
@@ -129,7 +129,7 @@ module attention_av_multiply #(
                 next_state = S_MUL;
             end
             S_MUL: begin
-                if (l2_cnt == L-1) begin
+                if (l2_cnt == ($clog2(L)'(L-1))) begin
                     next_state = S_DONE;
                 end
             end
@@ -195,11 +195,20 @@ module attention_av_multiply #(
                                 valV_down = V_arr[l2_cnt][n_][e_];
                             end
                         endcase
-
-                        // Multiply in lower precision, upcast product to FP16 automatically
+                        
+                        // Multiply and scale for Q1.3/Q1.7
                         product = valA_down * valV_down;
+                        case (token_precision[l2_cnt])
+                            4'd0: // INT4 (Q1.3): divide by 2^6
+                                Z_arr[l][n_][e_] <= Z_arr[l][n_][e_] + (product >> 6);
+                            4'd1: // INT8 (Q1.7): divide by 2^14
+                                Z_arr[l][n_][e_] <= Z_arr[l][n_][e_] + (product >> 14);
+                            default: // FP16: no scaling
+                                Z_arr[l][n_][e_] <= Z_arr[l][n_][e_] + product;
+                        endcase
+
                         // Accumulation in FP16
-                        Z_arr[l][n_][e_] <= Z_arr[l][n_][e_] + product;
+                        //Z_arr[l][n_][e_] <= Z_arr[l][n_][e_] + product;
                     end
                 end
             end
