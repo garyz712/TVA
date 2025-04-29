@@ -64,7 +64,7 @@ async def test_attention_score(dut):
                 # Convert to signed integer (handle sign extension)
                 if bits & (1 << (DATA_WIDTH - 1)):  # If sign bit is set
                     bits = bits - (1 << DATA_WIDTH)
-                A_np[l, n, l2] = bits
+                A_np[L-1-l, n, L-1-l2] = bits
     
     # Compute reference attention scores
     A_ref = np.zeros((L, N, L), dtype=np.int32)
@@ -162,7 +162,7 @@ async def test_attention_score_fixed(dut):
                 # Convert to signed integer (handle sign extension)
                 if bits & (1 << (DATA_WIDTH - 1)):  # If sign bit is set
                     bits = bits - (1 << DATA_WIDTH)
-                A_np[l, n, l2] = bits
+                A_np[L-1-l, n, L-1-l2] = bits
     
     # Compute reference attention scores
     A_ref = np.zeros((L, N, L), dtype=np.int32)

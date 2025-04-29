@@ -129,12 +129,12 @@ module attention_score #(
     // Load inputs into arrays
     always_ff @(posedge clk) begin
         if (state == S_LOAD) begin
-            // Unpack Q_in and K_in with reversed e_ index
+            // Unpack Q_in and K_in
             for (int l = 0; l < L; l++) begin
                 for (int n_ = 0; n_ < N; n_++) begin
                     for (int e_ = 0; e_ < E; e_++) begin
-                        Q[l][n_][e_] <= Q_in[((l*N*E)+(n_*E)+(E-1-e_))*DATA_WIDTH +: DATA_WIDTH];
-                        K[l][n_][e_] <= K_in[((l*N*E)+(n_*E)+(E-1-e_))*DATA_WIDTH +: DATA_WIDTH];
+                        Q[l][n_][e_] <= Q_in[((l*N*E)+(n_*E)+(e_))*DATA_WIDTH +: DATA_WIDTH];
+                        K[l][n_][e_] <= K_in[((l*N*E)+(n_*E)+(e_))*DATA_WIDTH +: DATA_WIDTH];
                     end
                 end
             end
@@ -167,13 +167,13 @@ module attention_score #(
         end
     end
 
-    // Pack output with reversed l and l2 indices
+    // Pack output
     always_ff @(posedge clk) begin
         if (state == S_DONE) begin
             for (int l = 0; l < L; l++) begin
                 for (int n_ = 0; n_ < N; n_++) begin
                     for (int l2 = 0; l2 < L; l2++) begin
-                        A_out[(((L-1-l)*N*L)+(n_*L)+(L-1-l2))*DATA_WIDTH +: DATA_WIDTH] <= A[l][n_][l2];
+                        A_out[(((l)*N*L)+(n_*L)+(l2))*DATA_WIDTH +: DATA_WIDTH] <= A[l][n_][l2];
                     end
                 end
             end
