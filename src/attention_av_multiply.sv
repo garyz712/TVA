@@ -12,8 +12,7 @@
 //  Apr 11 2025    Tianwei Liu    refactor in SV
 //  Apr 11 2025    Tianwei Liu    split state machine logic
 //  Apr 11 2025    Tianwei Liu    add comments
-//  Apr 28 2025    Max Zhang      Bug fixes
-//  Apr 29 2025    Tianwei Liu    Use FP16 multiplier
+//  Apr 29 2025    Max Zhang      Fix INT Multiplication
 //------------------------------------------------------------------------------
 
 // IO Description
@@ -64,7 +63,7 @@ module attention_av_multiply #(
     // Use SystemVerilog packed arrays for synthesis clarity
     logic [DATA_WIDTH-1:0] A_arr [L-1:0][N-1:0][L-1:0];
     logic [DATA_WIDTH-1:0] V_arr [L-1:0][N-1:0][E-1:0];
-    logic [DATA_WIDTH-1:0] Z_arr [L-1:0][N-1:0][E-1:0];
+    logic [31:0] Z_arr [L-1:0][N-1:0][E-1:0]; // Widened to 32 bits
 
     // State machine encoding
     typedef enum logic [1:0] {
@@ -75,24 +74,17 @@ module attention_av_multiply #(
     } state_t;
     state_t state, next_state;
 
-    // Internal signals for accumulation
-    logic [DATA_WIDTH-1:0] Z_temp [L-1:0][N-1:0][E-1:0];
-    logic [DATA_WIDTH-1:0] product;
-    logic [DATA_WIDTH-1:0] valA_down;
-    logic [DATA_WIDTH-1:0] valV_down;
-
     // Counter for MUL state to iterate over l2
     logic [$clog2(L)-1:0] l2_cnt;
 
-    logic [15:0] fp16_A, fp16_B, fp16_product;
-
-
-    fp16_mul fp16_multiplier_inst (
-        .A(fp16_A),
-        .B(fp16_B),
-        .result(fp16_product)
-    );
-
+    // Signals for adaptive precision multiplication
+    logic [3:0]  valA_int4, valV_int4;  // 4-bit inputs for INT4
+    logic [7:0]  valA_int8, valV_int8;  // 8-bit inputs for INT8
+    logic [15:0] valA_fp16, valV_fp16;  // 16-bit inputs for FP16
+    logic [7:0]  product_int4;          // 8-bit product for INT4 (4x4)
+    logic [15:0] product_int8;          // 16-bit product for INT8 (8x8)
+    logic [31:0] product_fp16;          // 32-bit product for FP16 (16x16)
+    logic [31:0] scaled_product;        // Widened to 32 bits for accumulation
 
     // Sequential logic for state and control signals
     always_ff @(posedge clk or negedge rst_n) begin
@@ -182,67 +174,54 @@ module attention_av_multiply #(
         end
     end
 
-    // Multiplication and accumulation
+    // Multiplication and accumulation with adaptive precision multipliers
     always_ff @(posedge clk) begin
         if (state == S_MUL) begin
             for (int l = 0; l < L; l++) begin
                 for (int n_ = 0; n_ < N; n_++) begin
                     for (int e_ = 0; e_ < E; e_++) begin
-                        // Downcast A, V based on precision code
+                        // Downcast inputs based on precision
                         case (token_precision[l2_cnt])
-                            4'd0: begin // INT4 (Q1.3 format)
-                                valA_down = {{(DATA_WIDTH-4){1'b0}}, A_arr[l][n_][l2_cnt][3:0]};
-                                valV_down = {{(DATA_WIDTH-4){1'b0}}, V_arr[l2_cnt][n_][e_][3:0]};
+                            4'd0: begin // INT4 (Q1.3)
+                                valA_int4 = A_arr[l][n_][l2_cnt][3:0];
+                                valV_int4 = V_arr[l2_cnt][n_][e_][3:0];
+                                product_int4 = valA_int4 * valV_int4; // 4x4-bit multiply
+                                scaled_product = {{24{1'b0}}, product_int4} >> 6; // Zero-extend to 32 bits
                             end
-                            4'd1: begin // INT8 (Q1.7 format)
-                                valA_down = {{(DATA_WIDTH-8){1'b0}}, A_arr[l][n_][l2_cnt][7:0]};
-                                valV_down = {{(DATA_WIDTH-8){1'b0}}, V_arr[l2_cnt][n_][e_][7:0]};
+                            4'd1: begin // INT8 (Q1.7)
+                                valA_int8 = A_arr[l][n_][l2_cnt][7:0];
+                                valV_int8 = V_arr[l2_cnt][n_][e_][7:0];
+                                product_int8 = valA_int8 * valV_int8; // 8x8-bit multiply
+                                scaled_product = {{16{1'b0}}, product_int8} >> 14; // Zero-extend to 32 bits
                             end
                             4'd2: begin // FP16
-                                valA_down = A_arr[l][n_][l2_cnt];
-                                valV_down = V_arr[l2_cnt][n_][e_];
+                                valA_fp16 = A_arr[l][n_][l2_cnt];
+                                valV_fp16 = V_arr[l2_cnt][n_][e_];
+                                product_fp16 = valA_fp16 * valV_fp16; // 16x16-bit multiply
+                                scaled_product = {{16{1'b0}}, product_fp16[15:0]}; // Zero-extend to 32 bits
                             end
                             default: begin // FP16
-                                valA_down = A_arr[l][n_][l2_cnt];
-                                valV_down = V_arr[l2_cnt][n_][e_];
+                                valA_fp16 = A_arr[l][n_][l2_cnt];
+                                valV_fp16 = V_arr[l2_cnt][n_][e_];
+                                product_fp16 = valA_fp16 * valV_fp16; // 16x16-bit multiply
+                                scaled_product = {{16{1'b0}}, product_fp16[15:0]}; // Zero-extend to 32 bits
                             end
                         endcase
-                        
-                        // Multiply and scale for Q1.3/Q1.7
-                        if (token_precision[l2_cnt] == 4'd2) begin
-                            // FP16 mode - use fp16 multiplier
-                            fp16_A <= A_arr[l][n_][l2_cnt];
-                            fp16_B <= V_arr[l2_cnt][n_][e_];
-                            product = fp16_product;
-                        end else begin
-                            // Integer downcast multiply
-                            product = valA_down * valV_down;
-                        end
-
-                        case (token_precision[l2_cnt])
-                            4'd0: // INT4 (Q1.3): divide by 2^6
-                                Z_arr[l][n_][e_] <= Z_arr[l][n_][e_] + (product >> 6);
-                            4'd1: // INT8 (Q1.7): divide by 2^14
-                                Z_arr[l][n_][e_] <= Z_arr[l][n_][e_] + (product >> 14);
-                            default: // FP16: no scaling
-                                Z_arr[l][n_][e_] <= Z_arr[l][n_][e_] + product;
-                        endcase
-
-                        // Accumulation in FP16
-                        //Z_arr[l][n_][e_] <= Z_arr[l][n_][e_] + product;
+                        // Accumulate into 32-bit Z_arr
+                        Z_arr[l][n_][e_] <= Z_arr[l][n_][e_] + scaled_product;
                     end
                 end
             end
         end
     end
 
-    // Pack output
+    // Pack output, truncating to 16 bits
     always_ff @(posedge clk) begin
         if (state == S_DONE) begin
             for (int l = 0; l < L; l++) begin
                 for (int n_ = 0; n_ < N; n_++) begin
                     for (int e_ = 0; e_ < E; e_++) begin
-                        Z_out[((l*N*E)+(n_*E)+e_)*DATA_WIDTH +: DATA_WIDTH] <= Z_arr[l][n_][e_];
+                        Z_out[((l*N*E)+(n_*E)+e_)*DATA_WIDTH +: DATA_WIDTH] <= Z_arr[l][n_][e_][15:0];
                     end
                 end
             end
