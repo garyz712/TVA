@@ -1,3 +1,4 @@
+
 // -----------------------------------------------------------------------------
 // Progressive-Precision 4‑Stage Pipelined Multiplier
 // -----------------------------------------------------------------------------
@@ -169,4 +170,178 @@ endmodule
 //         • Add saturation / rounding as required by your numeric format.
 //         • Throughput = 1 result per cycle (pipeline full).
 // -----------------------------------------------------------------------------
+
+// -----------------------------------------------------------------------------
+//  Attention A×V Multiply – integrated "precision‑progressive" multipliers
+// -----------------------------------------------------------------------------
+//  Replaces each scalar multiply with a MUL16_PROGRESSIVE instance so INT4
+//  finishes in 1 cycle, INT8 in 2 cycles, and FP16/full‑16 in 4 cycles.
+//  One multiplier is instantiated per (l,n,e) lane; its inputs change once
+//  each S_MUL clock as l2 sweeps 0…L‑1.  Partial products return with their
+//  own valid flags, and we accumulate them into Z_arr whenever that flag
+//  asserts.
+// -----------------------------------------------------------------------------
+module attention_av_multiply #(
+    parameter int DATA_WIDTH = 16,
+    parameter int L          = 8,
+    parameter int N          = 1,
+    parameter int E          = 8
+)(
+    input  logic                        clk,
+    input  logic                        rst_n,
+    // Control
+    input  logic                        start,
+    output logic                        done,
+    // Input A: shape (L, N, L)
+    input  logic [DATA_WIDTH*L*N*L-1:0] A_in,
+    // Input V: shape (L, N, E)
+    input  logic [DATA_WIDTH*L*N*E-1:0] V_in,
+    // Per‑token precision codes: length L  (0=INT4  1=INT8  else=FP16)
+    input  logic [3:0]                  token_precision [L-1:0],
+    // Output Z: shape (L, N, E)
+    output logic [DATA_WIDTH*L*N*E-1:0] Z_out,
+    output logic                        out_valid
+);
+
+    // ---------------------------------------------------------------------
+    // Internal storage (unpacked views)
+    // ---------------------------------------------------------------------
+    logic [DATA_WIDTH-1:0] A_arr   [L-1:0][N-1:0][L-1:0];
+    logic [DATA_WIDTH-1:0] V_arr   [L-1:0][N-1:0][E-1:0];
+    logic [31:0]           Z_arr   [L-1:0][N-1:0][E-1:0];
+
+    typedef enum logic [1:0] { S_IDLE, S_LOAD, S_MUL, S_DONE } state_t;
+    state_t state, next_state;
+
+    logic [$clog2(L)-1:0] l2_cnt;
+
+    // ---------------------------------------------------------------------
+    //  FSM & counters
+    // ---------------------------------------------------------------------
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            state   <= S_IDLE;
+            done    <= 1'b0;
+            out_valid <= 1'b0;
+            l2_cnt  <= '0;
+        end else begin
+            state <= next_state;
+            unique case (state)
+                S_IDLE: begin
+                    done      <= 1'b0;
+                    out_valid <= 1'b0;
+                    l2_cnt    <= '0;
+                end
+                S_LOAD: l2_cnt <= '0;
+                S_MUL : l2_cnt <= (l2_cnt == L-1) ? '0 : l2_cnt + 1;
+                S_DONE: begin
+                    done      <= 1'b1;
+                    out_valid <= 1'b1;
+                end
+            endcase
+        end
+    end
+
+    always_comb begin
+        next_state = state;
+        unique case (state)
+            S_IDLE: if (start)          next_state = S_LOAD;
+            S_LOAD:                     next_state = S_MUL;
+            S_MUL : if (l2_cnt==L-1)    next_state = S_DONE;
+            S_DONE:                     next_state = S_IDLE;
+        endcase
+    end
+
+    // ---------------------------------------------------------------------
+    //  Unpack inputs & clear accumulators on S_LOAD
+    // ---------------------------------------------------------------------
+    always_ff @(posedge clk) begin
+        if (state == S_LOAD) begin
+            for (int l=0; l<L; l++)
+                for (int n_=0; n_<N; n_++)
+                    for (int l2=0; l2<L; l2++)
+                        A_arr[l][n_][l2] <= A_in[((l*N*L)+(n_*L)+l2)*DATA_WIDTH +: DATA_WIDTH];
+
+            for (int l2=0; l2<L; l2++)
+                for (int n_=0; n_<N; n_++)
+                    for (int e_=0; e_<E; e_++)
+                        V_arr[l2][n_][e_] <= V_in[((l2*N*E)+(n_*E)+e_)*DATA_WIDTH +: DATA_WIDTH];
+
+            for (int l=0; l<L; l++)
+                for (int n_=0; n_<N; n_++)
+                    for (int e_=0; e_<E; e_++)
+                        Z_arr[l][n_][e_] <= 32'd0;
+        end
+    end
+
+    // ---------------------------------------------------------------------
+    //  Progressive multiplier lanes (generate)
+    // ---------------------------------------------------------------------
+    logic lane_v4  [L-1:0][N-1:0][E-1:0];
+    logic lane_v8  [L-1:0][N-1:0][E-1:0];
+    logic lane_v16 [L-1:0][N-1:0][E-1:0];
+    logic [7:0]  lane_p4  [L-1:0][N-1:0][E-1:0];
+    logic [15:0] lane_p8  [L-1:0][N-1:0][E-1:0];
+    logic [31:0] lane_p16 [L-1:0][N-1:0][E-1:0];
+
+    generate
+        for (genvar l=0; l<L; l++) begin : g_l
+            for (genvar n_=0; n_<N; n_++) begin : g_n
+                for (genvar e_=0; e_<E; e_++) begin : g_e
+                    wire [15:0] op_a = A_arr[l][n_][l2_cnt];
+                    wire [15:0] op_b = V_arr[l2_cnt][n_][e_];
+                    wire        v_in = (state == S_MUL);
+
+                    mul16_progressive u_mul (
+                        .clk         (clk),
+                        .rst_n       (rst_n),
+                        .in_valid    (v_in),
+                        .a           (op_a),
+                        .b           (op_b),
+                        .out4_valid  (lane_v4 [l][n_][e_]),
+                        .p4          (lane_p4 [l][n_][e_]),
+                        .out8_valid  (lane_v8 [l][n_][e_]),
+                        .p8          (lane_p8 [l][n_][e_]),
+                        .out16_valid (lane_v16[l][n_][e_]),
+                        .p16         (lane_p16[l][n_][e_])
+                    );
+
+                    logic [31:0] sel_prod;
+                    logic        sel_valid;
+                    always_comb begin
+                        unique case (token_precision[l2_cnt])
+                            4'd0: begin sel_prod={24'd0,lane_p4[l][n_][e_]}; sel_valid=lane_v4[l][n_][e_]; end
+                            4'd1: begin sel_prod={16'd0,lane_p8[l][n_][e_]}; sel_valid=lane_v8[l][n_][e_]; end
+                            default: begin sel_prod=lane_p16[l][n_][e_];    sel_valid=lane_v16[l][n_][e_]; end
+                        endcase
+                    end
+
+                    always_ff @(posedge clk) begin
+                        if (!rst_n) begin
+                            Z_arr[l][n_][e_] <= 32'd0;
+                        end else if (state == S_LOAD) begin
+                            Z_arr[l][n_][e_] <= 32'd0;
+                        end else if (sel_valid) begin
+                            Z_arr[l][n_][e_] <= Z_arr[l][n_][e_] + sel_prod;
+                        end
+                    end
+                end
+            end
+        end
+    endgenerate
+
+    // ---------------------------------------------------------------------
+    //  Pack outputs when finished
+    // ---------------------------------------------------------------------
+    always_ff @(posedge clk) begin
+        if (state == S_DONE) begin
+            for (int l=0; l<L; l++)
+                for (int n_=0; n_<N; n_++)
+                    for (int e_=0; e_<E; e_++)
+                        Z_out[((l*N*E)+(n_*E)+e_)*DATA_WIDTH +: DATA_WIDTH] <= Z_arr[l][n_][e_][15:0];
+        end
+    end
+endmodule
+
+
 
