@@ -1,14 +1,27 @@
+
+//------------------------------------------------------------------------------
+// Module: residual
+// Description: Performs element-wise addition of two input vectors
+// (x_in and sub_in) to compute a residual connection.
+// Uses an FSM to control sequential addition.
+//
+// May 3 2025    Max Zhang      Initial version
+// May 3 2025    Tianwei Liu    Comments
+//------------------------------------------------------------------------------
 module residual #(
-    parameter int DATA_WIDTH = 16,
-    parameter int SEQ_LEN    = 8,
-    parameter int EMB_DIM    = 8
+    parameter int DATA_WIDTH = 16, // Bit width of each data element
+    parameter int SEQ_LEN    = 8,  // Sequence length of input data
+    parameter int EMB_DIM    = 8   // Embedding dimension of input data
 )(
+    // control signals
     input  logic                                      clk,
     input  logic                                      rst_n,
     input  logic                                      start,
     output logic                                      done,
+    // input vectors
     input  logic [DATA_WIDTH*SEQ_LEN*EMB_DIM -1:0]    x_in,
     input  logic [DATA_WIDTH*SEQ_LEN*EMB_DIM -1:0]    sub_in,
+    // residual sum
     output logic [DATA_WIDTH*SEQ_LEN*EMB_DIM -1:0]    y_out,
     output logic                                      out_valid
 );
