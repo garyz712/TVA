@@ -1,9 +1,17 @@
-// src/layer_norm.sv  ── full replacement
+//------------------------------------------------------------------------------
+// layer_norm.sv
+// Implements layer normalization for a sequence of tokens with given embedding dimensions.
+// Computes mean and variance per row, normalizes input, and applies gamma/beta scaling.
+// Operates on flattened input/output arrays with fixed-point arithmetic.
+//
+// May 3 2025    Max Zhang      Initial version
+// May 3 2025    Tianwei Liu    Fix syntax issue
+//------------------------------------------------------------------------------
 module layer_norm #(
     parameter int DATA_WIDTH = 16,
     parameter int SEQ_LEN    = 8,   // number of tokens or rows
     parameter int EMB_DIM    = 8,   // embedding dimension
-    parameter logic [31:0] EPS = 32'h34000000 // ~1e‑5 in float, or small in fixed
+    parameter logic [31:0] EPS = 32'h34000000 // ~1e-5 in float, or small in fixed
 )(
     input  logic                                      clk,
     input  logic                                      rst_n,
@@ -32,7 +40,7 @@ module layer_norm #(
     state_t curr_state, next_state;
 
     // Row / column indices
-    logic [2:0] row_i, col_i;   // 0‑7
+    logic [2:0] row_i, col_i;   // 0-7
 
     // ------------------------------------------------------------------
     // Memories
@@ -51,7 +59,7 @@ module layer_norm #(
     localparam logic [31:0] EPSILON = EPS;
 
     // ------------------------------------------------------------------
-    // Helper: fetch flattened x_in  (width‑clean)
+    // Helper: fetch flattened x_in  (width-clean)
     // ------------------------------------------------------------------
     function automatic logic [DATA_WIDTH-1:0] get_x(
         input logic [2:0] r,
@@ -64,13 +72,13 @@ module layer_norm #(
     endfunction
 
     // ------------------------------------------------------------------
-    // *** Floor division helper (signed, truncates toward −∞) ***
+    // Floor division helper (signed, truncates toward -∞)
     // ------------------------------------------------------------------
     function automatic logic signed [31:0] floor_div32(
         input logic signed [31:0] numer,
         input int                 denom        // positive constant (8)
     );
-        logic signed [31:0] q  = numer / denom;   // truncate‑to‑zero
+        logic signed [31:0] q  = numer / denom;   // truncate-to-zero
         logic signed [31:0] r  = numer % denom;   // remainder has same sign as numer
         if ((r != 0) && (numer < 0))  // adjust when numerator is negative and rem != 0
             q = q - 1;
@@ -85,7 +93,7 @@ module layer_norm #(
         else        curr_state <= next_state;
     end
 
-    // Next‑state logic
+    // Next-state logic
     always_comb begin
         next_state = curr_state;
         case (curr_state)
@@ -102,6 +110,41 @@ module layer_norm #(
             S_DONE     :                   next_state = S_IDLE;
             default: ;
         endcase
+    end
+
+    // ------------------------------------------------------------------
+    // Datapath signals
+    // ------------------------------------------------------------------
+    logic signed [31:0] new_mean_acc;
+    logic signed [31:0] diff;
+    logic signed [31:0] new_var_acc;
+    logic signed [31:0] denom;
+    logic signed [31:0] inv_std;
+    logic signed [31:0] tmp_norm;
+    logic signed [31:0] gamma_val;
+    logic signed [31:0] beta_val;
+    logic signed [31:0] after_gamma;
+    logic signed [31:0] final_val;
+
+    logic [DATA_WIDTH-1:0] x_mem_temp [0:SEQ_LEN-1][0:EMB_DIM-1];
+
+    // Combinational calculations
+    always_comb begin
+        new_mean_acc = mean_acc + {{16{x_mem[row_i][col_i][15]}}, x_mem[row_i][col_i]};
+        diff = {{16{x_mem[row_i][col_i][15]}}, x_mem[row_i][col_i]} - row_mean;
+        new_var_acc = var_acc + (diff * diff);
+        denom = row_var + EPSILON;
+        inv_std = approximate_inv_sqrt(denom);
+        tmp_norm = diff * inv_std;
+        gamma_val = {{16{gamma_arr[col_i][15]}}, gamma_arr[col_i]};
+        beta_val = {{16{beta_arr[col_i][15]}}, beta_arr[col_i]};
+        after_gamma = tmp_norm * gamma_val;
+        final_val = after_gamma + beta_val;
+
+        // Compute x_mem_temp combinationaly
+        for (int i = 0; i < SEQ_LEN; i++)
+            for (int j = 0; j < EMB_DIM; j++)
+                x_mem_temp[i][j] = get_x(i[2:0], j[2:0]);
     end
 
     // ------------------------------------------------------------------
@@ -151,15 +194,13 @@ module layer_norm #(
                 end
 
                 //------------------------------------------------------
-                // Mean accumulation  (include current element *first*)
+                // Mean accumulation
                 //------------------------------------------------------
                 S_ROW_MEAN: begin
-                    logic signed [31:0] new_mean_acc =
-                        mean_acc + {{16{x_mem[row_i][col_i][15]}}, x_mem[row_i][col_i]};
                     mean_acc <= new_mean_acc;
 
                     if (col_i == 3'd7) begin
-                        row_mean <= floor_div32(new_mean_acc, EMB_DIM);  // *** floor div ***
+                        row_mean <= floor_div32(new_mean_acc, EMB_DIM);
                         col_i    <= 3'd0;
                         mean_acc <= 32'd0;
                     end
@@ -168,16 +209,13 @@ module layer_norm #(
                 end
 
                 //------------------------------------------------------
-                // Variance accumulation  (row_var is non‑negative but we still use floor_div32)
+                // Variance accumulation
                 //------------------------------------------------------
                 S_ROW_VAR: begin
-                    logic signed [31:0] diff =
-                        {{16{x_mem[row_i][col_i][15]}}, x_mem[row_i][col_i]} - row_mean;
-                    logic signed [31:0] new_var_acc = var_acc + (diff * diff);
                     var_acc <= new_var_acc;
 
                     if (col_i == 3'd7) begin
-                        row_var <= floor_div32(new_var_acc, EMB_DIM);    // *** floor div ***
+                        row_var <= floor_div32(new_var_acc, EMB_DIM);
                         col_i   <= 3'd0;
                         var_acc <= 32'd0;
                     end
@@ -189,20 +227,6 @@ module layer_norm #(
                 // Normalisation + γ/β
                 //------------------------------------------------------
                 S_ROW_NORM: begin
-                    logic signed [31:0] diff =
-                        {{16{x_mem[row_i][col_i][15]}}, x_mem[row_i][col_i]} - row_mean;
-                    logic signed [31:0] denom    = row_var + EPSILON;
-                    logic signed [31:0] inv_std  = approximate_inv_sqrt(denom);
-                    logic signed [31:0] tmp_norm = diff * inv_std;
-
-                    logic signed [31:0] gamma_val =
-                        {{16{gamma_arr[col_i][15]}}, gamma_arr[col_i]};
-                    logic signed [31:0] beta_val  =
-                        {{16{beta_arr [col_i][15]}}, beta_arr [col_i]};
-
-                    logic signed [31:0] after_gamma = tmp_norm * gamma_val;
-                    logic signed [31:0] final_val   = after_gamma + beta_val;
-
                     if (final_val > 32'sd32767)
                         out_mem[row_i][col_i] <= 16'sd32767;
                     else if (final_val < -32'sd32768)
@@ -242,7 +266,7 @@ module layer_norm #(
     end
 
     // ------------------------------------------------------------------
-    // Cheap placeholder inv‑sqrt
+    // Cheap placeholder inv-sqrt
     // ------------------------------------------------------------------
     function automatic logic [31:0] approximate_inv_sqrt(input logic [31:0] val);
         return (val == 0) ? 32'd0 : 32'd10;
