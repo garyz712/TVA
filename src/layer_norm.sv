@@ -93,7 +93,12 @@ module layer_norm #(
             S_ROW_MEAN : if (col_i == 3'd7) next_state = S_ROW_VAR;
             S_ROW_VAR  : if (col_i == 3'd7) next_state = S_ROW_NORM;
             S_ROW_NORM : if (col_i == 3'd7) next_state = S_NEXT_ROW;
-            S_NEXT_ROW :                   next_state = (row_i == 3'd7) ? S_DONE : S_ROW_MEAN;
+            S_NEXT_ROW : begin
+                if (row_i == 3'd7)
+                    next_state = S_DONE;
+                else
+                    next_state = S_ROW_MEAN;
+            end
             S_DONE     :                   next_state = S_IDLE;
             default: ;
         endcase
