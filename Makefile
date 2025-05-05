@@ -1,5 +1,5 @@
 # Simulator settings
-SIM ?= icarus
+SIM ?= verilator
 TOPLEVEL_LANG ?= verilog
 
 # Cocotb settings

@@ -315,5 +315,3 @@ module qkv_projection #(
     end
 
 endmodule
-
-

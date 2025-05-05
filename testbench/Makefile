@@ -1,7 +1,7 @@
 # Makefile
 
 # defaults
-SIM ?= icarus
+SIM ?= verilator
 TOPLEVEL_LANG ?= verilog
 
 VERILOG_SOURCES += $(PWD)/../src/attention_av_multiply.sv
