@@ -10,162 +10,228 @@
 //  Apr. 10 2025    Max Zhang      Initial version
 //  Apr. 11 2025    Tianwei Liu    Refactor in SV, split state machine, add comments
 //  Apr. 30 2025    Max Zhang      Redesigned with pipelined variable-latency multipliers
+//  May. 9 2025    Max Zhang       Redesigned with pipelined variable-latency multipliers with memory tiling
 //------------------------------------------------------------------------------
+
 module attention_av_multiply #(
-    parameter int DATA_WIDTH = 16,
-    parameter int L          = 8,
-    parameter int N          = 1,
-    parameter int E          = 8
+    parameter int A_ROWS = 8,        // Attention matrix column size
+    parameter int V_COLS = 32,       // Value matrix row size
+    parameter int TILE_SIZE = 8,     // Submatrix size (8x8)
+    parameter int WIDTH_INT4 = 4,    // INT4 width (Q1.3)
+    parameter int WIDTH_INT8 = 8,    // INT8 width (Q1.7)
+    parameter int WIDTH_FP16 = 16    // FP16 width (Q1.15)
 )(
     input  logic                        clk,
     input  logic                        rst_n,
     input  logic                        start,
+    input  logic [1:0]                  precision_sel, // Single precision for the column
+    input  logic [WIDTH_FP16-1:0]       a_mem [A_ROWS], // Attention column (BRAM)
+    input  logic [WIDTH_FP16-1:0]       v_mem [V_COLS], // Value row (BRAM)
     output logic                        done,
-
-    input  logic [DATA_WIDTH*L*N*L-1:0] A_in,
-    input  logic [DATA_WIDTH*L*N*E-1:0] V_in,
-    input  logic [3:0]                  token_precision [L-1:0],
-
-    output logic [DATA_WIDTH*L*N*E-1:0] Z_out,
-    output logic                        out_valid
+    output logic [WIDTH_FP16-1:0]       out_mem [A_ROWS][V_COLS] // Output matrix (BRAM)
 );
-    // ---------------------------------------------------------------------
-    // Unpacked storage
-    // ---------------------------------------------------------------------
-    logic [DATA_WIDTH-1:0] A_arr [L-1:0][N-1:0][L-1:0];
-    logic [DATA_WIDTH-1:0] V_arr [L-1:0][N-1:0][E-1:0];
-    logic [31:0]           Z_arr [L-1:0][N-1:0][E-1:0];
 
-    // FSM ------------------------------------------------------------------
-    typedef enum logic [1:0] { S_IDLE, S_LOAD, S_MUL, S_DONE } state_t;
+    // Local parameters
+    localparam int NUM_TILES = V_COLS / TILE_SIZE; // 4 tiles (32 / 8)
+    localparam int WIDTH_OUT = WIDTH_FP16;         // Output in FP16 (Q1.15)
+    localparam int CYCLES_INT4 = 1;
+    localparam int CYCLES_INT8 = 2;
+    localparam int CYCLES_FP16 = 4;
+
+    // FSM states
+    typedef enum logic [2:0] {
+        IDLE,
+        LOAD_TILE,
+        COMPUTE,
+        UPCAST_ACCUM,
+        STORE_TILE,
+        DONE
+    } state_t;
     state_t state, next_state;
-    logic [$clog2(L)-1:0] l2_cnt;
 
-    always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin
-            state <= S_IDLE; done <= 0; out_valid <= 0; l2_cnt <= 0;
-        end else begin
-            state <= next_state;
-            unique case (state)
-                S_IDLE: begin done<=0; out_valid<=0; l2_cnt<=0; end
-                S_LOAD: l2_cnt <= 0;
-                S_MUL : l2_cnt <= (l2_cnt==L-1) ? 0 : l2_cnt+1;
-                S_DONE: begin done<=1; out_valid<=1; end
-            endcase
-        end
-    end
+    // Signals
+    logic [WIDTH_FP16-1:0] a_vec [A_ROWS];           // Current attention column
+    logic [WIDTH_FP16-1:0] v_vec [TILE_SIZE];        // Current value tile row
+    logic [WIDTH_OUT-1:0]  submatrix [A_ROWS][TILE_SIZE]; // 8x8 submatrix
+    logic [WIDTH_OUT-1:0]  accum [A_ROWS][V_COLS];   // Accumulator
+    logic [WIDTH_INT4-1:0] a_int4 [A_ROWS];          // INT4 inputs
+    logic [WIDTH_INT4-1:0] v_int4 [TILE_SIZE];
+    logic [WIDTH_INT8-1:0] a_int8 [A_ROWS];          // INT8 inputs
+    logic [WIDTH_INT8-1:0] v_int8 [TILE_SIZE];
+    logic [WIDTH_FP16-1:0] a_fp16 [A_ROWS];          // FP16 inputs
+    logic [WIDTH_FP16-1:0] v_fp16 [TILE_SIZE];
+    logic [7:0]            p4 [A_ROWS][TILE_SIZE];   // INT4 partial products
+    logic [15:0]           p8 [A_ROWS][TILE_SIZE];   // INT8 partial products
+    logic [31:0]           p16 [A_ROWS][TILE_SIZE];  // FP16 partial products
+    logic                  out4_valid [A_ROWS][TILE_SIZE];
+    logic                  out8_valid [A_ROWS][TILE_SIZE];
+    logic                  out16_valid [A_ROWS][TILE_SIZE];
+    logic [31:0]           cycle_count;              // Cycle counter
+    logic [31:0]           cycles_needed;            // Cycles for this column
+    logic [31:0]           tile_idx;                 // Current tile index
+    logic                  compute_valid;             // Compute enable
+    logic                  accum_valid;              // Accumulation enable
 
-    always_comb begin
-        next_state = state;
-        unique case (state)
-            S_IDLE: if (start) next_state = S_LOAD;
-            S_LOAD:           next_state = S_MUL;
-            S_MUL : if (l2_cnt==L-1) next_state = S_DONE;
-            S_DONE:           next_state = S_IDLE;
-        endcase
-    end
-
-    // ---------------------------------------------------------------------
-    // Unpack inputs and clear accumulators on S_LOAD
-    // ---------------------------------------------------------------------
-    always_ff @(posedge clk) begin
-        if (state==S_LOAD) begin
-            for (int l=0;l<L;l++)
-                for (int n_=0;n_<N;n_++)
-                    for (int l2=0;l2<L;l2++)
-                        A_arr[l][n_][l2] <= A_in[((l*N*L)+(n_*L)+l2)*DATA_WIDTH +: DATA_WIDTH];
-            for (int l2=0;l2<L;l2++)
-                for (int n_=0;n_<N;n_++)
-                    for (int e_=0;e_<E;e_++)
-                        V_arr[l2][n_][e_] <= V_in[((l2*N*E)+(n_*E)+e_)*DATA_WIDTH +: DATA_WIDTH];
-            for (int l=0;l<L;l++)
-                for (int n_=0;n_<N;n_++)
-                    for (int e_=0;e_<E;e_++)
-                        Z_arr[l][n_][e_] <= 32'd0;
-        end
-    end
-
-    // ---------------------------------------------------------------------
-    // Global precision pipeline (aligns with multiplier latencies)
-    // ---------------------------------------------------------------------
-    logic [3:0] prec_p0, prec_p1, prec_p2, prec_p3, prec_p4;
-    always_ff @(posedge clk) begin
-        if (state!=S_MUL) begin prec_p0<=0; prec_p1<=0; prec_p2<=0; prec_p3<=0; prec_p4<=0; end
-        else begin
-            prec_p0 <= token_precision[l2_cnt];
-            prec_p1 <= prec_p0;
-            prec_p2 <= prec_p1;
-            prec_p3 <= prec_p2;
-            prec_p4 <= prec_p3;
-        end
-    end
-
-    // ---------------------------------------------------------------------
-    // Generate multiplier lanes
-    // ---------------------------------------------------------------------
-    logic lane_v4  [L-1:0][N-1:0][E-1:0];
-    logic lane_v8  [L-1:0][N-1:0][E-1:0];
-    logic lane_v16 [L-1:0][N-1:0][E-1:0];
-    logic [7:0]  lane_p4  [L-1:0][N-1:0][E-1:0];
-    logic [15:0] lane_p8  [L-1:0][N-1:0][E-1:0];
-    logic [31:0] lane_p16 [L-1:0][N-1:0][E-1:0];
-
+    // Instantiate mul16_progressive for 8x8 submatrix
+    genvar i, j;
     generate
-        for (genvar l=0;l<L;l++) begin : gL
-            for (genvar n_=0;n_<N;n_++) begin : gN
-                for (genvar e_=0;e_<E;e_++) begin : gE
-                    mul16_progressive u_mul (
-                        .clk  (clk), .rst_n(rst_n),
-                        .in_valid(state==S_MUL),
-                        .a (A_arr[l][n_][l2_cnt]),
-                        .b (V_arr[l2_cnt][n_][e_]),
-                        .out4_valid (lane_v4 [l][n_][e_]),
-                        .p4         (lane_p4 [l][n_][e_]),
-                        .out8_valid (lane_v8 [l][n_][e_]),
-                        .p8         (lane_p8 [l][n_][e_]),
-                        .out16_valid(lane_v16[l][n_][e_]),
-                        .p16        (lane_p16[l][n_][e_])
-                    );
-
-                    // Select first valid product according to precision code
-                    logic sel_valid;
-                    logic [31:0] sel_prod;
-                    always_comb begin
-                        sel_valid = 1'b0; sel_prod = 32'd0;
-                        // INT‑4 (latency 1) aligns with prec_p1
-                        if (lane_v4[l][n_][e_]  && prec_p1==4'd0) begin
-                            sel_valid = 1'b1;
-                            sel_prod  = ({24'd0,lane_p4[l][n_][e_]} >> 6); // scale Q1.3→Q2.30
-                        end
-                        // INT‑8 (latency 2) aligns with prec_p2
-                        else if (lane_v8[l][n_][e_] && prec_p2==4'd1) begin
-                            sel_valid = 1'b1;
-                            sel_prod  = ({16'd0,lane_p8[l][n_][e_]} >> 14); // scale Q1.7→Q2.30
-                        end
-                        // FP16/full16 (latency 4) aligns with prec_p4
-                        else if (lane_v16[l][n_][e_] && prec_p4>=4'd2) begin
-                            sel_valid = 1'b1;
-                            sel_prod  = lane_p16[l][n_][e_];
-                        end
-                    end
-
-                    always_ff @(posedge clk) begin
-                        if (sel_valid) Z_arr[l][n_][e_] <= Z_arr[l][n_][e_] + sel_prod;
-                    end
-                end
+        for (i = 0; i < A_ROWS; i++) begin : gen_row
+            for (j = 0; j < TILE_SIZE; j++) begin : gen_col
+                mul16_progressive #(
+                    .WIDTH(WIDTH_FP16)
+                ) mul_inst (
+                    .clk(clk),
+                    .rst_n(rst_n),
+                    .in_valid(compute_valid),
+                    .a(precision_sel == 2'b00 ? {{12{1'b0}}, a_int4[i]} :
+                       precision_sel == 2'b01 ? {{8{1'b0}}, a_int8[i]} :
+                       a_fp16[i]),
+                    .b(precision_sel == 2'b00 ? {{12{1'b0}}, v_int4[j]} :
+                       precision_sel == 2'b01 ? {{8{1'b0}}, v_int8[j]} :
+                       v_fp16[j]),
+                    .out4_valid(out4_valid[i][j]),
+                    .p4(p4[i][j]),
+                    .out8_valid(out8_valid[i][j]),
+                    .p8(p8[i][j]),
+                    .out16_valid(out16_valid[i][j]),
+                    .p16(p16[i][j])
+                );
             end
         end
     endgenerate
 
-    // ---------------------------------------------------------------------
-    // Pack outputs on S_DONE
-    // ---------------------------------------------------------------------
-    always_ff @(posedge clk) begin
-        if (state==S_DONE) begin
-            for (int l=0;l<L;l++)
-                for (int n_=0;n_<N;n_++)
-                    for (int e_=0;e_<E;e_++)
-                        Z_out[((l*N*E)+(n_*E)+e_)*DATA_WIDTH +: DATA_WIDTH] <= Z_arr[l][n_][e_][15:0];
+    // Precision conversion and input selection
+    always_comb begin
+        for (int i = 0; i < A_ROWS; i++) begin
+            a_int4[i] = a_mem[i][WIDTH_INT4-1:0];   // Truncate to Q1.3
+            a_int8[i] = a_mem[i][WIDTH_INT8-1:0];   // Truncate to Q1.7
+            a_fp16[i] = a_mem[i];                    // Q1.15
+        end
+        for (int j = 0; j < TILE_SIZE; j++) begin
+            v_int4[j] = v_vec[j][WIDTH_INT4-1:0];
+            v_int8[j] = v_vec[j][WIDTH_INT8-1:0];
+            v_fp16[j] = v_vec[j];
         end
     end
+
+    // Determine cycles needed for this column's precision
+    always_comb begin
+        case (precision_sel)
+            2'b00: cycles_needed = CYCLES_INT4; // INT4: 1 cycle
+            2'b01: cycles_needed = CYCLES_INT8; // INT8: 2 cycles
+            2'b10: cycles_needed = CYCLES_FP16; // FP16: 4 cycles
+            default: cycles_needed = CYCLES_FP16;
+        endcase
+    end
+
+    // FSM: State register
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n)
+            state <= IDLE;
+        else
+            state <= next_state;
+    end
+
+    // FSM: Next state and control logic
+    always_comb begin
+        next_state = state;
+        compute_valid = 1'b0;
+        accum_valid = 1'b0;
+        done = 1'b0;
+
+        case (state)
+            IDLE: begin
+                if (start)
+                    next_state = LOAD_TILE;
+            end
+            LOAD_TILE: begin
+                next_state = COMPUTE;
+            end
+            COMPUTE: begin
+                compute_valid = 1'b1;
+                if (cycle_count >= cycles_needed - 1)
+                    next_state = UPCAST_ACCUM;
+            end
+            UPCAST_ACCUM: begin
+                accum_valid = 1'b1;
+                next_state = STORE_TILE;
+            end
+            STORE_TILE: begin
+                if (tile_idx == NUM_TILES - 1)
+                    next_state = DONE;
+                else
+                    next_state = LOAD_TILE;
+            end
+            DONE: begin
+                done = 1'b1;
+                next_state = IDLE;
+            end
+        endcase
+    end
+
+    // Cycle counter
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n)
+            cycle_count <= 0;
+        else if (state == COMPUTE) begin
+            if (cycle_count < cycles_needed - 1)
+                cycle_count <= cycle_count + 1;
+            else
+                cycle_count <= 0;
+        end else
+            cycle_count <= 0;
+    end
+
+    // Tile index
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n)
+            tile_idx <= 0;
+        else if (state == STORE_TILE && next_state == LOAD_TILE)
+            tile_idx <= tile_idx + 1;
+        else if (state == DONE)
+            tile_idx <= 0;
+    end
+
+    // Load tile data
+    always_ff @(posedge clk) begin
+        if (state == LOAD_TILE) begin
+            for (int i = 0; i < A_ROWS; i++)
+                a_vec[i] <= a_mem[i];
+            for (int j = 0; j < TILE_SIZE; j++)
+                v_vec[j] <= v_mem[tile_idx * TILE_SIZE + j];
+        end
+    end
+
+    // Upcast and accumulate
+    always_ff @(posedge clk) begin
+        if (!rst_n) begin
+            for (int i = 0; i < A_ROWS; i++)
+                for (int j = 0; j < V_COLS; j++)
+                    accum[i][j] <= 0;
+        end else if (state == UPCAST_ACCUM) begin
+            for (int i = 0; i < A_ROWS; i++) begin
+                for (int j = 0; j < T
+ILE_SIZE; j++) begin
+                    logic [WIDTH_OUT-1:0] result;
+                    case (precision_sel)
+                        2'b00: result = {{8{p4[i][j][7]}}, p4[i][j], 8'h0}; // INT4 -> FP16
+                        2'b01: result = {{8{p8[i][j][7]}}, p8[i][j]};       // INT8 -> FP16
+                        2'b10: result = p16[i][j][WIDTH_OUT-1:0];           // FP16
+                        default: result = 0;
+                    endcase
+                    accum[i][tile_idx * TILE_SIZE + j] <= accum[i][tile_idx * TILE_SIZE + j] + result;
+                end
+            end
+        end
+    end
+
+    // Store output
+    always_ff @(posedge clk) begin
+        if (state == DONE) begin
+            for (int i = 0; i < A_ROWS; i++)
+                for (int j = 0; j < V_COLS; j++)
+                    out_mem[i][j] <= accum[i][j];
+        end
+    end
+
 endmodule
