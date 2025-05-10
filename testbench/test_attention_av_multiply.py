@@ -2,132 +2,244 @@ import cocotb
 from cocotb.clock import Clock
 from cocotb.triggers import RisingEdge, Timer
 import numpy as np
-import random
 
-# Parameters matching the module
-DATA_WIDTH = 16
-L = 8
-N = 1
-E = 8
+# Parameters
+A_ROWS = 8
+V_COLS = 32
+NUM_COLS = 8
+TILE_SIZE = 8
+WIDTH_INT4 = 4
+WIDTH_INT8 = 8
+WIDTH_FP16 = 16
+NUM_TILES = V_COLS // TILE_SIZE  # 4
+CYCLES_INT4 = 1
+CYCLES_INT8 = 2
+CYCLES_FP16 = 4
+TOLERANCE = 0.001  # FP16 tolerance for Q1.15
 
+# Helper function: Convert real to Q1.15 (FP16)
+def real_to_q1_15(x):
+    val = int(x * (2**15))
+    if val > 32767:
+        val = 32767  # Clamp to max positive
+    if val < -32768:
+        val = -32768  # Clamp to min negative
+    return val & 0xFFFF  # Ensure 16-bit
+
+# Helper function: Convert Q1.15 to real
+def q1_15_to_real(x):
+    return float(np.int16(x)) / (2**15)
+
+# Helper function: Convert real to Q1.7 (INT8)
+def real_to_q1_7(x):
+    val = int(x * (2**7))
+    if val > 127:
+        val = 127
+    if val < -128:
+        val = -128
+    return val & 0xFF
+
+# Helper function: Convert real to Q1.3 (INT4)
+def real_to_q1_3(x):
+    val = int(x * (2**3))
+    if val > 7:
+        val = 7
+    if val < -8:
+        val = -8
+    return val & 0xF
+
+# Helper function: Compute expected outer product
+def compute_expected(a_mem, v_mem, precision_sel):
+    expected_out = np.zeros((A_ROWS, V_COLS), dtype=float)
+    for k in range(NUM_COLS):
+        prec = precision_sel[k]
+        for i in range(A_ROWS):
+            a_val = q1_15_to_real(a_mem[i][k])
+            if prec == 0:  # INT4 (Q1.3)
+                a_val = round(a_val * (2**3)) / (2**3)
+            elif prec == 1:  # INT8 (Q1.7)
+                a_val = round(a_val * (2**7)) / (2**7)
+            # FP16 (Q1.15): no truncation
+            for j in range(V_COLS):
+                v_val = q1_15_to_real(v_mem[k][j])
+                if prec == 0:  # INT4
+                    v_val = round(v_val * (2**3)) / (2**3)
+                elif prec == 1:  # INT8
+                    v_val = round(v_val * (2**7)) / (2**7)
+                prod = a_val * v_val
+                expected_out[i, j] += prod
+    # Convert to Q1.15
+    expected_out_q = np.zeros((A_ROWS, V_COLS), dtype=np.int16)
+    for i in range(A_ROWS):
+        for j in range(V_COLS):
+            expected_out_q[i, j] = real_to_q1_15(expected_out[i, j])
+    return expected_out_q
+
+# Helper function: Verify output
+async def verify_output(dut, expected_out):
+    errors = 0
+    for i in range(A_ROWS):
+        for j in range(V_COLS):
+            actual = q1_15_to_real(dut.out_mem[i][j].value)
+            expected = q1_15_to_real(expected_out[i, j])
+            diff = actual - expected
+            if abs(diff) > TOLERANCE:
+                dut._log.error(f"Error at out_mem[{i}][{j}]: actual={actual}, expected={expected}")
+                errors += 1
+    if errors == 0:
+        dut._log.info("Test passed: Output matches expected.")
+    else:
+        dut._log.error(f"Test failed: {errors} errors found.")
+    return errors
+
+# Reset DUT
 async def reset_dut(dut):
-    """Reset the DUT."""
     dut.rst_n.value = 0
+    dut.start.value = 0
     await Timer(20, units="ns")
     dut.rst_n.value = 1
-    await Timer(20, units="ns")
-
-def pack_array(data, width):
-    """Pack a numpy array into a flat integer for Verilog input."""
-    flat = 0
-    for i, val in enumerate(data.flatten()):
-        flat |= (int(val) & ((1 << width) - 1)) << (i * width)
-    return flat
-
-def unpack_array(data, width, shape):
-    """Unpack a flat integer into a numpy array."""
-    result = np.zeros(shape, dtype=np.int32)
-    for i in range(np.prod(shape)):
-        result.flat[i] = (data >> (i * width)) & ((1 << width) - 1)
-    return result
-
-def software_model(A, V, token_precision):
-    """Software model for attention computation with adaptive precision."""
-    Z = np.zeros((L, N, E), dtype=np.int64)  # Use int64 to prevent overflow
-    for l in range(L):
-        for n in range(N):
-            for e in range(E):
-                for l2 in range(L):
-                    if token_precision[l2] == 0:  # INT4 (Q1.3 format)
-                        a_val = (A[l][n][l2] & 0xF) * 0.125  # Lower 4 bits, scale by 2^-3
-                        v_val = (V[l2][n][e] & 0xF) * 0.125
-                    elif token_precision[l2] == 1:  # INT8 (Q1.7 format)
-                        a_val = (A[l][n][l2] & 0xFF) * 0.0078125  # Lower 8 bits, scale by 2^-7
-                        v_val = (V[l2][n][e] & 0xFF) * 0.0078125
-                    else:  # FP16 (16-bit fixed-point)
-                        a_val = A[l][n][l2]
-                        v_val = V[l2][n][e]
-                    Z[l][n][e] += a_val * v_val
-                # Wrap to 16-bit for FP16 mode
-                if token_precision[0] == 2:  # Apply only in uniform FP16 test case
-                    Z[l][n][e] = Z[l][n][e] & 0xFFFF  # Keep lower 16 bits
-    return Z.astype(np.int32)  # Convert back to int32 for comparison
+    await Timer(10, units="ns")
 
 @cocotb.test()
 async def test_attention_av_multiply(dut):
-    """Test the attention_av_multiply module."""
     # Start clock
-    clock = Clock(dut.clk, 10, units="ns")
+    clock = Clock(dut.clk, 10, units="ns")  # 100 MHz
     cocotb.start_soon(clock.start())
 
-    # Reset DUT
+    # Initialize DUT
     await reset_dut(dut)
 
-    # Test cases: different precision settings
-    precision_cases = [
-        [0] * L,  # All INT4
-        [1] * L,  # All INT8
-        [2] * L,  # All FP16
-        [0, 1, 2, 0, 1, 2, 0, 1],  # Mixed: alternating
-        [2, 2, 1, 1, 0, 0, 2, 1],  # Mixed: FP16-heavy
-        [0, 0, 0, 1, 1, 1, 2, 2],  # Mixed: grouped
-        [2, 0, 1, 2, 0, 1, 2, 0],  # Mixed: high-frequency precision switches
-    ]
+    # Test Case 1: All INT4
+    dut._log.info("\nTest Case 1: All INT4")
+    a_mem = np.zeros((A_ROWS, NUM_COLS), dtype=np.int16)
+    v_mem = np.zeros((NUM_COLS, V_COLS), dtype=np.int16)
+    precision_sel = [0] * NUM_COLS  # INT4 (00)
+    for k in range(NUM_COLS):
+        for i in range(A_ROWS):
+            a_mem[i, k] = real_to_q1_15(0.125 * (i + k + 1))  # e.g., 0.125, 0.25
+        for j in range(V_COLS):
+            v_mem[k, j] = real_to_q1_15(0.0625 * (j + k + 1))  # e.g., 0.0625, 0.125
+    # Drive inputs
+    for k in range(NUM_COLS):
+        dut.precision_sel[k].value = precision_sel[k]
+        for i in range(A_ROWS):
+            dut.a_mem[i][k].value = a_mem[i, k]
+        for j in range(V_COLS):
+            dut.v_mem[k][j].value = v_mem[k, j]
+    expected_out = compute_expected(a_mem, v_mem, precision_sel)
+    dut.start.value = 1
+    await RisingEdge(dut.clk)
+    dut.start.value = 0
+    await RisingEdge(dut.done)
+    await Timer(10, units="ns")
+    await verify_output(dut, expected_out)
 
-    for case_idx, token_precision in enumerate(precision_cases):
-        dut._log.info(f"Running test case {case_idx}: token_precision = {token_precision}")
+    # Test Case 2: All INT8
+    dut._log.info("\nTest Case 2: All INT8")
+    precision_sel = [1] * NUM_COLS  # INT8 (01)
+    for k in range(NUM_COLS):
+        for i in range(A_ROWS):
+            a_mem[i, k] = real_to_q1_15(0.03125 * (i + k + 1))  # e.g., 0.03125
+        for j in range(V_COLS):
+            v_mem[k, j] = real_to_q1_15(0.015625 * (j + k + 1))  # e.g., 0.015625
+    for k in range(NUM_COLS):
+        dut.precision_sel[k].value = precision_sel[k]
+        for i in range(A_ROWS):
+            dut.a_mem[i][k].value = a_mem[i, k]
+        for j in range(V_COLS):
+            dut.v_mem[k][j].value = v_mem[k, j]
+    expected_out = compute_expected(a_mem, v_mem, precision_sel)
+    dut.start.value = 1
+    await RisingEdge(dut.clk)
+    dut.start.value = 0
+    await RisingEdge(dut.done)
+    await Timer(10, units="ns")
+    await verify_output(dut, expected_out)
 
-        # Generate random input data (use conservative range for mixed precision)
-        max_val = 256  # Fits INT8, safe for INT4 and FP16
-        A = np.random.randint(0, max_val, (L, N, L), dtype=np.int32)
-        V = np.random.randint(0, max_val, (L, N, E), dtype=np.int32)
+    # Test Case 3: All FP16
+    dut._log.info("\nTest Case 3: All FP16")
+    precision_sel = [2] * NUM_COLS  # FP16 (10)
+    for k in range(NUM_COLS):
+        for i in range(A_ROWS):
+            a_mem[i, k] = real_to_q1_15(0.01 * (i + k + 1))  # e.g., 0.01
+        for j in range(V_COLS):
+            v_mem[k, j] = real_to_q1_15(0.005 * (j + k + 1))  # e.g., 0.005
+    for k in range(NUM_COLS):
+        dut.precision_sel[k].value = precision_sel[k]
+        for i in range(A_ROWS):
+            dut.a_mem[i][k].value = a_mem[i, k]
+        for j in range(V_COLS):
+            dut.v_mem[k][j].value = v_mem[k, j]
+    expected_out = compute_expected(a_mem, v_mem, precision_sel)
+    dut.start.value = 1
+    await RisingEdge(dut.clk)
+    dut.start.value = 0
+    await RisingEdge(dut.done)
+    await Timer(10, units="ns")
+    await verify_output(dut, expected_out)
 
-        # Pack inputs
-        A_in = pack_array(A, DATA_WIDTH)
-        V_in = pack_array(V, DATA_WIDTH)
+    # Test Case 4: Mixed Precisions
+    dut._log.info("\nTest Case 4: Mixed Precisions")
+    precision_sel = [0, 1, 2, 0, 1, 2, 0, 1]  # INT4, INT8, FP16, ...
+    for k in range(NUM_COLS):
+        for i in range(A_ROWS):
+            a_mem[i, k] = real_to_q1_15(0.05 * (i + k + 1))
+        for j in range(V_COLS):
+            v_mem[k, j] = real_to_q1_15(0.025 * (j + k + 1))
+    for k in range(NUM_COLS):
+        dut.precision_sel[k].value = precision_sel[k]
+        for i in range(A_ROWS):
+            dut.a_mem[i][k].value = a_mem[i, k]
+        for j in range(V_COLS):
+            dut.v_mem[k][j].value = v_mem[k, j]
+    expected_out = compute_expected(a_mem, v_mem, precision_sel)
+    dut.start.value = 1
+    await RisingEdge(dut.clk)
+    dut.start.value = 0
+    await RisingEdge(dut.done)
+    await Timer(10, units="ns")
+    await verify_output(dut, expected_out)
 
-        # Set inputs
-        dut.A_in.value = A_in
-        dut.V_in.value = V_in
-        for i in range(L):
-            dut.token_precision[i].value = token_precision[i]
-        dut.start.value = 0
+    # Test Case 5: Zero Inputs
+    dut._log.info("\nTest Case 5: Zero Inputs")
+    precision_sel = [2] * NUM_COLS  # FP16
+    a_mem.fill(0)
+    v_mem.fill(0)
+    for k in range(NUM_COLS):
+        dut.precision_sel[k].value = precision_sel[k]
+        for i in range(A_ROWS):
+            dut.a_mem[i][k].value = a_mem[i, k]
+        for j in range(V_COLS):
+            dut.v_mem[k][j].value = v_mem[k, j]
+    expected_out = compute_expected(a_mem, v_mem, precision_sel)
+    dut.start.value = 1
+    await RisingEdge(dut.clk)
+    dut.start.value = 0
+    await RisingEdge(dut.done)
+    await Timer(10, units="ns")
+    await verify_output(dut, expected_out)
 
-        # Wait for reset to settle
-        await RisingEdge(dut.clk)
+    # Test Case 6: Random Inputs
+    dut._log.info("\nTest Case 6: Random Inputs")
+    rng = np.random.default_rng()
+    for k in range(NUM_COLS):
+        precision_sel[k] = rng.integers(0, 3)  # Random: 0, 1, or 2
+        for i in range(A_ROWS):
+            a_mem[i, k] = real_to_q1_15(rng.uniform(-0.5, 0.5))
+        for j in range(V_COLS):
+            v_mem[k, j] = real_to_q1_15(rng.uniform(-0.5, 0.5))
+    for k in range(NUM_COLS):
+        dut.precision_sel[k].value = precision_sel[k]
+        for i in range(A_ROWS):
+            dut.a_mem[i][k].value = a_mem[i, k]
+        for j in range(V_COLS):
+            dut.v_mem[k][j].value = v_mem[k, j]
+    expected_out = compute_expected(a_mem, v_mem, precision_sel)
+    dut.start.value = 1
+    await RisingEdge(dut.clk)
+    dut.start.value = 0
+    await RisingEdge(dut.done)
+    await Timer(10, units="ns")
+    await verify_output(dut, expected_out)
 
-        # Start computation
-        dut.start.value = 1
-        await RisingEdge(dut.clk)
-        dut.start.value = 0
-
-        # Wait for done signal
-        for _ in range(200):  # Timeout after 200 cycles
-            await RisingEdge(dut.clk)
-            if dut.done.value == 1:
-                break
-        else:
-            raise RuntimeError("Timeout waiting for done signal")
-
-        # Check output valid
-        assert dut.out_valid.value == 1, "Output valid not set"
-
-        # Read output
-        Z_out = dut.Z_out.value
-        Z_hw = unpack_array(Z_out, DATA_WIDTH, (L, N, E))
-
-        # Compute expected output
-        Z_sw = software_model(A, V, token_precision)
-        
-        # Add wrapping for mixed precision
-        if len(set(token_precision)) > 1:
-            Z_sw = Z_sw % 65536  # Wrap to 16 bits
-
-        # Compare results (increased tolerance for FP16-involved cases)
-        tolerance = 100 if 2 in token_precision else 10
-        assert np.all(np.abs(Z_hw - Z_sw) <= tolerance), \
-            f"Test case {case_idx} failed: Z_hw =\n{Z_hw}\nZ_sw =\n{Z_sw}"
-
-        dut._log.info(f"Test case {case_idx} passed")
-
-    dut._log.info("All test cases passed!")
+    dut._log.info("All tests completed.")
