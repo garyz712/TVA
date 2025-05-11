@@ -1,12 +1,12 @@
 //------------------------------------------------------------------------------
-// new_mul16.sv
+// mul16_progressive.sv
 //
 // Signed 16-bit multiplier that treats inputs as Q1.15 (signed) and outputs
 // Q0.3 (4 bits), Q0.7 (8 bits), and Q0.15 (16 bits) with the first bit as the sign.
 //
 // May 10 2025    Tianwei Liu    Modified for signed multiplication
 //------------------------------------------------------------------------------
-module mul16 (
+module mul16_progressive (
     input  logic        clk,
     input  logic        rst_n,
     input  logic [15:0] a,          // Signed Q1.15 input
