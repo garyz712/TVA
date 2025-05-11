@@ -175,6 +175,9 @@ module attention_av_multiply #(
                 done = 1'b1;
                 next_state = IDLE;
             end
+            default: begin
+                next_state = IDLE;
+            end
         endcase
     end
 
