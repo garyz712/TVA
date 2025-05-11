@@ -23,8 +23,27 @@ module mul16 (
 
     // Internal signals
     logic [31:0]  product_full;        // Full 32-bit product (Q1.30 format)
+    logic [31:0]  product_comb;        // Full 32-bit product (Q1.30 format)
     logic [31:0]  product_reg1, product_reg2, product_reg3; // Pipeline registers
     logic         valid_reg1, valid_reg2, valid_reg3, valid_reg4; // Valid signal pipeline
+
+    logic [31:0] expand_a;
+    logic [31:0] expand_a_tc;
+
+    always_comb begin
+        product_comb = '0;
+        expand_a     = {{16{a[15]}}, a};
+        expand_a_tc  = -expand_a + 1;
+        for (int i = 0; i < 16; ++i) begin
+            if (i != 15 && b[i] == 1) begin
+                product_comb += (expand_a << i);
+            end
+            if (i == 15 && b[i] == 1) begin
+                product_comb += (expand_a_tc << i);
+            end
+        end
+    end
+
 
     // Stage 1: Compute full product (Q1.30) and Q1.6 output
     always_ff @(posedge clk or negedge rst_n) begin
@@ -36,7 +55,8 @@ module mul16 (
             valid_reg1     <= 1'b0;
         end else begin
             // Compute 16-bit x 16-bit signed multiplication
-            product_full   <= $signed(a) * $signed(b); // Q0.15 * Q0.15 = Q1.30
+            // product_full   <= $signed(a) * $signed(b); // Q0.15 * Q0.15 = Q1.30
+            product_full   <= product_comb;
             product_reg1   <= product_full;
             valid_reg1     <= valid_in;
 
