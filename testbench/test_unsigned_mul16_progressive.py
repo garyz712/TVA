@@ -4,7 +4,7 @@ from cocotb.clock import Clock
 import random
 
 @cocotb.test()
-async def test_mul16_progressive(dut):
+async def test_unsigned_mul16_progressive(dut):
     # Start clock
     clock = Clock(dut.clk, 10, units="ns")  # 100 MHz clock
     cocotb.start_soon(clock.start())
