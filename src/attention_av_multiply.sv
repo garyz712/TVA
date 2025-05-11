@@ -243,8 +243,8 @@ module attention_av_multiply #(
                 for (int j = 0; j < TILE_SIZE; j++) begin
                     logic [WIDTH_OUT-1:0] result;
                     case (precision_sel[col_idx])
-                        2'b00: result = {{8{p4[i][j][7]}}, p4[i][j], 8'h0}; // INT4 -> FP16
-                        2'b01: result = {{8{p8[i][j][7]}}, p8[i][j]};       // INT8 -> FP16
+                        2'b00: result = {{8{p4[i][j][7]}}, p4[i][j]}; // INT4 -> FP16
+                        2'b01: result = p8[i][j];       // INT8 -> FP16
                         2'b10: result = p16[i][j][WIDTH_OUT-1:0];           // FP16
                         default: result = 0;
                     endcase
