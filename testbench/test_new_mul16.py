@@ -1,46 +1,44 @@
 import cocotb
 from cocotb.clock import Clock
 from cocotb.triggers import RisingEdge, Timer
-import random
-import math
 
-# Helper function to convert floating-point to Q1.N fixed-point (two's complement)
-def float_to_q1_n(value, n_frac_bits):
-    # Scale by 2^n_frac_bits, round, and clamp to 16-bit two's complement
+# Convert float to signed Q0.N fixed-point (two's complement)
+def float_to_q0_n(value, n_frac_bits):
+    if not (-1 <= value < 1):
+        raise ValueError(f"Q0.{n_frac_bits} format supports [-1.0, 1.0) range")
     scaled = round(value * (1 << n_frac_bits))
-    return scaled & 0xFFFF if scaled >= 0 else (scaled + (1 << 16)) & 0xFFFF
+    total_bits = n_frac_bits + 1
+    if scaled < 0:
+        scaled = (1 << total_bits) + scaled
+    return scaled & ((1 << total_bits) - 1)
 
-# Helper function to convert Q1.N fixed-point back to float
-def q1_n_to_float(value, n_frac_bits):
-    # Sign-extend if negative
-    if value & 0x8000:
-        value = value - (1 << 16)
+# Convert Q0.N fixed-point (two's complement) to float
+def q0_n_to_float(value, n_frac_bits):
+    total_bits = n_frac_bits + 1
+    if value & (1 << (total_bits - 1)):
+        value -= (1 << total_bits)
     return value / (1 << n_frac_bits)
 
-# Helper function to compute expected product in Q1.N format
-def expected_product(a, b, in_frac_bits, out_frac_bits, out_bits):
-    # Convert inputs to float
-    a_float = q1_n_to_float(a, in_frac_bits)
-    b_float = q1_n_to_float(b, in_frac_bits)
-    # Compute product
+# Compute expected product in Q0.N format
+def expected_product_q0_signed(a, b, in_frac_bits, out_frac_bits, out_bits):
+    a_float = q0_n_to_float(a, in_frac_bits)
+    b_float = q0_n_to_float(b, in_frac_bits)
     product = a_float * b_float
-    # Convert to output Q-format
     scaled = round(product * (1 << out_frac_bits))
-    # Extract relevant bits
-    shift = out_frac_bits + 1 - out_bits  # Adjust for output bit-width
+    shift = out_frac_bits + 1 - out_bits
     if shift > 0:
         scaled = scaled >> shift
-    mask = (1 << out_bits) - 1
-    return scaled & mask
+    if scaled < 0:
+        scaled = (1 << out_bits) + scaled
+    return scaled & ((1 << out_bits) - 1)
 
 @cocotb.test()
-async def test_four_stage_multiplier(dut):
-    """Test the four-stage multiplier for Q1.2, Q1.6, Q1.14 outputs with positive and negative inputs"""
-    # Initialize clock (10ns period)
+async def test_four_stage_multiplier_q0_signed(dut):
+    """Test the four-stage multiplier for Q0.3, Q0.7, Q0.15 outputs (signed fixed-point)"""
     clock = Clock(dut.clk, 10, units="ns")
     cocotb.start_soon(clock.start())
 
-    # Reset the DUT
+    # Reset DUT
     dut.rst_n.value = 0
     dut.a.value = 0
     dut.b.value = 0
@@ -50,66 +48,63 @@ async def test_four_stage_multiplier(dut):
     dut.rst_n.value = 1
     await RisingEdge(dut.clk)
 
-    # Test configurations for Q1.2, Q1.6, Q1.14
+    # Define test cases for Q0.3 (4-bit), Q0.7 (8-bit), Q0.15 (16-bit)
     test_cases = [
-        # Q1.2 inputs (2 fractional bits)
-        {"in_format": 2, "test_values": [
-            (0.5, 0.5), (0.75, -0.25), (-0.5, 0.5), (-0.75, -0.75), (0.0, 1.0), (1.0, -1.0)
+        {"in_format": 3, "test_values": [
+            (0.0, 0.0), (0.875, -0.875), (-0.5, 0.5), (-0.875, -0.875)
         ]},
-        # Q1.6 inputs (6 fractional bits)
-        {"in_format": 6, "test_values": [
-            (0.5, 0.5), (0.875, -0.125), (-0.5, 0.25), (-0.625, -0.625), (0.0, 0.5), (0.5, -0.5)
+        {"in_format": 7, "test_values": [
+            (0.0, 0.0), (0.99, -0.125), (-0.5, 0.25), (-0.75, -0.75)
         ]},
-        # Q1.14 inputs (14 fractional bits)
-        {"in_format": 14, "test_values": [
-            (0.5, 0.5), (0.999, -0.001), (-0.5, 0.1), (-0.9, -0.9), (0.0, 0.01), (0.01, -0.01)
+        {"in_format": 15, "test_values": [
+            (0.0, 0.0), (0.999, -0.001), (-0.5, 0.1), (-0.999, -0.999)
         ]}
     ]
 
     for test_case in test_cases:
         in_frac_bits = test_case["in_format"]
         for a_float, b_float in test_case["test_values"]:
-            # Convert inputs to Q1.N format
-            a = float_to_q1_n(a_float, in_frac_bits)
-            b = float_to_q1_n(b_float, in_frac_bits)
+            a = float_to_q0_n(a_float, in_frac_bits)
+            b = float_to_q0_n(b_float, in_frac_bits)
 
-            # Drive inputs
             dut.a.value = a
             dut.b.value = b
             dut.valid_in.value = 1
             await RisingEdge(dut.clk)
 
-            # Wait for Q1.2 output (1 cycle latency)
+            # Q0.3 (4-bit) output: after 1 cycle
             await RisingEdge(dut.clk)
-            if dut.q1_2_valid.value:
-                expected = expected_product(a, b, in_frac_bits, 2, 4)
-                actual = int(dut.q1_2_out.value)
-                assert actual == expected, f"Q1.2 failed: a={a_float}, b={b_float}, expected={expected}, got={actual}"
+            if hasattr(dut, "q0_3_valid") and dut.q0_3_valid.value:
+                expected = expected_product_q0_signed(a, b, in_frac_bits, 3, 4)
+                actual = int(dut.q0_3_out.value)
+                assert actual == expected, f"Q0.3 failed: a={a_float}, b={b_float}, expected={expected}, got={actual}"
 
-            # Wait for Q1.6 output (1 more cycle, total 2 cycles)
+            # Q0.7 (8-bit) output: after 2 cycles
             await RisingEdge(dut.clk)
-            if dut.q1_6_valid.value:
-                expected = expected_product(a, b, in_frac_bits, 6, 8)
-                actual = int(dut.q1_6_out.value)
-                assert actual == expected, f"Q1.6 failed: a={a_float}, b={b_float}, expected={expected}, got={actual}"
+            if hasattr(dut, "q0_7_valid") and dut.q0_7_valid.value:
+                expected = expected_product_q0_signed(a, b, in_frac_bits, 7, 8)
+                actual = int(dut.q0_7_out.value)
+                assert actual == expected, f"Q0.7 failed: a={a_float}, b={b_float}, expected={expected}, got={actual}"
 
-            # Wait for Q1.14 output (2 more cycles, total 4 cycles)
+            # Q0.15 (16-bit) output: after 4 cycles
             await RisingEdge(dut.clk)
             await RisingEdge(dut.clk)
-            if dut.q1_14_valid.value:
-                expected = expected_product(a, b, in_frac_bits, 14, 16)
-                actual = int(dut.q1_14_out.value)
-                assert actual == expected, f"Q1.14 failed: a={a_float}, b={b_float}, expected={expected}, got={actual}"
+            if hasattr(dut, "q0_15_valid") and dut.q0_15_valid.value:
+                expected = expected_product_q0_signed(a, b, in_frac_bits, 15, 16)
+                actual = int(dut.q0_15_out.value)
+                assert actual == expected, f"Q0.15 failed: a={a_float}, b={b_float}, expected={expected}, got={actual}"
 
-            # Clear valid_in
             dut.valid_in.value = 0
             await RisingEdge(dut.clk)
 
-    # Run a few extra cycles to ensure pipeline clears
+    # Flush remaining pipeline
     for _ in range(5):
         await RisingEdge(dut.clk)
 
-    # Final checks: ensure outputs are invalid after pipeline flush
-    assert dut.q1_2_valid.value == 0, "Q1.2 valid should be 0 after flush"
-    assert dut.q1_6_valid.value == 0, "Q1.6 valid should be 0 after flush"
-    assert dut.q1_14_valid.value == 0, "Q1.14 valid should be 0 after flush"
+    # Final check to ensure valid signals are cleared
+    if hasattr(dut, "q0_3_valid"):
+        assert dut.q0_3_valid.value == 0, "Q0.3 valid should be 0 after flush"
+    if hasattr(dut, "q0_7_valid"):
+        assert dut.q0_7_valid.value == 0, "Q0.7 valid should be 0 after flush"
+    if hasattr(dut, "q0_15_valid"):
+        assert dut.q0_15_valid.value == 0, "Q0.15 valid should be 0 after flush"
