@@ -30,7 +30,6 @@ async def test_mul16_progressive(dut):
     # Wait for 1 cycle (Q1.6)
     await RisingEdge(dut.clk)
     await RisingEdge(dut.clk)
-    await RisingEdge(dut.clk)
 
     assert dut.q1_6_valid.value == 1, "Q1.6 valid should be high"
     assert dut.q1_6_out.value == expected_q1_6, f"Q1.6 output mismatch: got {hex(dut.q1_6_out.value)}, expected {hex(expected_q1_6)}"

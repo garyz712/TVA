@@ -7,6 +7,7 @@
 // May 10 2025    Tianwei Liu    Initial version
 // May 11 2025    Tianwei Liu    Fix fixed-point multiplication
 // May 11 2025    Tianwei Liu    Add clock division
+// May 12 2025    Tianwei Liu    Fix clock division alighment
 //------------------------------------------------------------------------------
 module mul16_progressive (
     input  logic         clk,
@@ -29,7 +30,9 @@ module mul16_progressive (
     logic [7:0]   product8_comb;       // 8-bit product
     // logic [31:0]  product_reg1, product_reg2, product_reg3; // Pipeline registers
     // logic         valid_reg1, valid_reg2, valid_reg3, valid_reg4; // Valid signal pipeline
-    logic [2:0]   valid_arr;
+    logic valid_1;
+    logic valid_2;
+    logic valid_4;
 
     logic [31:0] expand_a;
     logic [31:0] expand_a_tc;
@@ -50,7 +53,7 @@ module mul16_progressive (
         end else begin
             div_counter <= div_counter + 1;
             clk2        <= div_counter[0];
-            clk4        <= div_counter[1];
+            clk4        <= ~div_counter[1];
         end
     end
 
@@ -99,16 +102,6 @@ module mul16_progressive (
         end
     end
 
-    // valid counter
-    always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin
-            valid_arr <= '0;
-        end else begin
-            valid_arr <= {valid_arr[1:0], valid_in};
-        end
-    end
-
-
     // Clock 1: Compute Q1.6 output
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -135,7 +128,7 @@ module mul16_progressive (
             // Q1.14 output: Take upper 16 bits (1 integer, 14 fractional, 1 sign)
             // From Q1.30, select bits [30:15] for Q1.14
             q1_14_out      <= product16_comb;
-            q1_14_valid    <= valid_arr[0];
+            q1_14_valid    <= valid_in;
         end
     end
 
@@ -147,7 +140,7 @@ module mul16_progressive (
         end else begin
             // Q1.30 output: Full product
             q1_30_out      <= product_comb;
-            q1_30_valid    <= valid_arr[2];
+            q1_30_valid    <= valid_in;
         end
     end
 
