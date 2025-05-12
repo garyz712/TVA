@@ -13,6 +13,20 @@
 //  May. 9 2025    Max Zhang       Redesigned with pipelined variable-latency multipliers with memory tiling
 //------------------------------------------------------------------------------
 
+//------------------------------------------------------------------------------
+// attention_av_multiply.sv
+//
+//  This module implements a matrix multiplication for the attention mechanism,
+//  computing A * V with token-wise mixed precision (INT4, INT8, FP16).
+//  Uses pipelined multipliers with variable latency to reduce cycle count
+//  for lower precision tokens, operating at a variable clock frequency.
+//
+//  Apr. 10 2025    Max Zhang      Initial version
+//  Apr. 11 2025    Tianwei Liu    Refactor in SV, split state machine, add comments
+//  Apr. 30 2025    Max Zhang      Redesigned with pipelined variable-latency multipliers
+//  May. 9 2025    Max Zhang       Redesigned with pipelined variable-latency multipliers with memory tiling
+//------------------------------------------------------------------------------
+
 module attention_av_multiply #(
     parameter int A_ROWS = 8,        // Attention matrix column size
     parameter int V_COLS = 32,       // Value matrix row size
@@ -26,10 +40,11 @@ module attention_av_multiply #(
     input  logic                        rst_n,
     input  logic                        start,
     input  logic [1:0]                  precision_sel [NUM_COLS], // Precision per column
-    input  logic [WIDTH_FP16-1:0]       a_mem [A_ROWS][NUM_COLS], // Attention matrix (BRAM)
-    input  logic [WIDTH_FP16-1:0]       v_mem [NUM_COLS][V_COLS], // Value matrix (BRAM)
+    input  logic [WIDTH_FP16-1:0]       a_mem [0:A_ROWS*NUM_COLS-1], // Flattened Attention matrix
+    input  logic [WIDTH_FP16-1:0]       v_mem [0:NUM_COLS*V_COLS-1], // Flattened Value matrix
     output logic                        done,
-    output logic [WIDTH_FP16-1:0]       out_mem [A_ROWS][V_COLS] // Accumulated output matrix (BRAM)
+ 
+    output logic [WIDTH_FP16-1:0]       out_mem [0:A_ROWS*V_COLS-1] // Accumulated output matrix
 );
 
     // Local parameters
@@ -55,7 +70,7 @@ module attention_av_multiply #(
     logic [WIDTH_FP16-1:0] a_vec [A_ROWS];           // Current attention column
     logic [WIDTH_FP16-1:0] v_vec [TILE_SIZE];        // Current value tile row
     logic [WIDTH_OUT-1:0]  submatrix [A_ROWS][TILE_SIZE]; // 8x8 submatrix
-    logic [WIDTH_OUT-1:0]  accum [A_ROWS][V_COLS];   // Accumulator for all columns
+    logic [32-1:0]         accum [A_ROWS][V_COLS];   // Accumulator for all columns
     logic [WIDTH_INT4-1:0] a_int4 [A_ROWS];          // INT4 inputs
     logic [WIDTH_INT4-1:0] v_int4 [TILE_SIZE];
     logic [WIDTH_INT8-1:0] a_int8 [A_ROWS];          // INT8 inputs
@@ -80,24 +95,22 @@ module attention_av_multiply #(
     generate
         for (i = 0; i < A_ROWS; i++) begin : gen_row
             for (j = 0; j < TILE_SIZE; j++) begin : gen_col
-                mul16_progressive #(
-                    .WIDTH(WIDTH_FP16)
-                ) mul_inst (
+                mul16_progressive mul_inst (
                     .clk(clk),
                     .rst_n(rst_n),
-                    .in_valid(compute_valid),
-                    .a(precision_sel[col_idx] == 2'b00 ? {{12{1'b0}}, a_int4[i]} :
-                       precision_sel[col_idx] == 2'b01 ? {{8{1'b0}}, a_int8[i]} :
+                    .valid_in(compute_valid),
+                    .a(precision_sel[col_idx] == 2'b00 ? {{12{a_int4[i][3]}}, a_int4[i]} :
+                       precision_sel[col_idx] == 2'b01 ? {{8{a_int8[i][7]}}, a_int8[i]} :
                        a_fp16[i]),
-                    .b(precision_sel[col_idx] == 2'b00 ? {{12{1'b0}}, v_int4[j]} :
-                       precision_sel[col_idx] == 2'b01 ? {{8{1'b0}}, v_int8[j]} :
+                    .b(precision_sel[col_idx] == 2'b00 ? {{12{v_int4[j][3]}}, v_int4[j]} :
+                       precision_sel[col_idx] == 2'b01 ? {{8{v_int8[j][7]}}, v_int8[j]} :
                        v_fp16[j]),
-                    .out4_valid(out4_valid[i][j]),
-                    .p4(p4[i][j]),
-                    .out8_valid(out8_valid[i][j]),
-                    .p8(p8[i][j]),
-                    .out16_valid(out16_valid[i][j]),
-                    .p16(p16[i][j])
+                    .q1_6_valid(out4_valid[i][j]),
+                    .q1_6_out(p4[i][j]),
+                    .q1_14_valid(out8_valid[i][j]),
+                    .q1_14_out(p8[i][j]),
+                    .q1_30_valid(out16_valid[i][j]),
+                    .q1_30_out(p16[i][j])
                 );
             end
         end
@@ -105,14 +118,14 @@ module attention_av_multiply #(
 
     // Precision conversion and input selection
     always_comb begin
-        for (int i = 0; i < A_ROWS; i++) begin
-            a_int4[i] = a_vec[i][WIDTH_INT4-1:0];   // Truncate to Q1.3
-            a_int8[i] = a_vec[i][WIDTH_INT8-1:0];   // Truncate to Q1.7
-            a_fp16[i] = a_vec[i];                    // Q1.15
+            for (int i = 0; i < A_ROWS; i++) begin
+            a_int4[i] = a_vec[i][15:12];   // Q1.3: sign bit + 3 fractional bits
+            a_int8[i] = a_vec[i][15:8];    // Q1.7: sign bit + 7 fractional bits
+            a_fp16[i] = a_vec[i];          // Q1.15: full precision
         end
         for (int j = 0; j < TILE_SIZE; j++) begin
-            v_int4[j] = v_vec[j][WIDTH_INT4-1:0];
-            v_int8[j] = v_vec[j][WIDTH_INT8-1:0];
+            v_int4[j] = v_vec[j][15:12];
+            v_int8[j] = v_vec[j][15:8];
             v_fp16[j] = v_vec[j];
         end
     end
@@ -135,6 +148,7 @@ module attention_av_multiply #(
             state <= next_state;
     end
 
+
     // FSM: Next state and control logic
     always_comb begin
         next_state = state;
@@ -155,6 +169,8 @@ module attention_av_multiply #(
             end
             COMPUTE: begin
                 compute_valid = 1'b1;
+                
+                
                 if (cycle_count >= cycles_needed - 1)
                     next_state = UPCAST_ACCUM;
             end
@@ -172,7 +188,7 @@ module attention_av_multiply #(
                     next_state = LOAD_TILE;
             end
             DONE: begin
-                done = 1'b1;
+                done = 1'b1; //cocotb line await RisingEdge(dut.done) therefore fires immediately after 20 ns, well before the next clock edge.
                 next_state = IDLE;
             end
             default: begin
@@ -218,9 +234,9 @@ module attention_av_multiply #(
     always_ff @(posedge clk) begin
         if (state == LOAD_COLUMN) begin
             for (int i = 0; i < A_ROWS; i++)
-                a_vec[i] <= a_mem[i][col_idx];
+                a_vec[i] <= a_mem[i * NUM_COLS + col_idx]; // Adjusted for flattened array
             for (int j = 0; j < TILE_SIZE; j++)
-                v_vec[j] <= v_mem[col_idx][tile_idx * TILE_SIZE + j];
+                v_vec[j] <= v_mem[col_idx * V_COLS + tile_idx * TILE_SIZE + j]; // Adjusted for flattened array
         end
     end
 
@@ -228,9 +244,31 @@ module attention_av_multiply #(
     always_ff @(posedge clk) begin
         if (state == LOAD_TILE) begin
             for (int j = 0; j < TILE_SIZE; j++)
-                v_vec[j] <= v_mem[col_idx][tile_idx * TILE_SIZE + j];
+                v_vec[j] <= v_mem[col_idx * V_COLS + tile_idx * TILE_SIZE + j]; // Adjusted for flattened array
         end
     end
+
+
+    function automatic logic signed [31:0] sat_add32
+            (input  logic signed [31:0] a,
+            input  logic signed [31:0] b);
+
+        logic signed [31:0] sum;
+        logic               ovf;
+        begin
+            sum = a + b;                              // 32-bit two's-complement add
+            ovf = (a[31] == b[31]) && (sum[31] != a[31]);
+
+            if (!ovf) begin
+                sat_add32 = sum;                      // no overflow → pass through
+            end else if (a[31] == 0) begin            // operands were positive
+                sat_add32 = 32'h7FFF_FFFF;            // clamp to +0.999 999 999 (Q2.30)
+            end else begin                            // operands were negative
+                sat_add32 = 32'h8000_0000;            // clamp to –1.0
+            end
+        end
+    endfunction
+
 
     // Upcast and accumulate
     always_ff @(posedge clk) begin
@@ -241,25 +279,50 @@ module attention_av_multiply #(
         end else if (state == UPCAST_ACCUM) begin
             for (int i = 0; i < A_ROWS; i++) begin
                 for (int j = 0; j < TILE_SIZE; j++) begin
-                    logic [WIDTH_OUT-1:0] result;
+                    logic [31:0] result;
+                    logic valid;
                     case (precision_sel[col_idx])
-                        2'b00: result = {{8{p4[i][j][7]}}, p4[i][j]}; // INT4 -> FP16
-                        2'b01: result = p8[i][j];       // INT8 -> FP16
-                        2'b10: result = p16[i][j][WIDTH_OUT-1:0];           // FP16
+                    // sign-cast + arithmetic left shift does everything in one step
+                        2'b00 : result = $signed(p4[i][j])  <<< 24;   // Q2.6  -> Q2.30
+                        2'b01 : result = $signed(p8[i][j])  <<< 16;  //{p8[i][j], {16{1'b0}}} // Q1.14 -> Q2.30
+                        2'b10 : result = $signed(p16[i][j]);          // already Q2.30
+
+                        // 2'b00: result = {{24{p4[i][j][7]}}, p4[i][j]} << 24; // Q2.6 to Q2.30: shift left by 24
+                        // 2'b01: result = {{16{p8[i][j][15]}}, p8[i][j]} << 16;     // Q1.14 (INT8) is close to Q1.15
+                        // 2'b10: result = $signed(p16[i][j]); // Q1.30 truncated to Q1.15
                         default: result = 0;
                     endcase
-                    accum[i][tile_idx * TILE_SIZE + j] <= accum[i][tile_idx * TILE_SIZE + j] + result;
+                    valid =
+                        (precision_sel[col_idx]==2'b00) ? out4_valid[i][j] :
+                        (precision_sel[col_idx]==2'b01) ? out8_valid[i][j] :
+                                                        out16_valid[i][j];
+                    if (valid) begin
+                        accum[i][tile_idx*TILE_SIZE+j] <= sat_add32(accum[i][tile_idx*TILE_SIZE+j], result);
+                        //accum[i][tile_idx*TILE_SIZE+j] <= accum[i][tile_idx*TILE_SIZE+j] + result;
+                    end
                 end
             end
         end
     end
 
-    // Store output
+    // Store output: Convert Q2.30 to Q1.15 by checking integer bits
     always_ff @(posedge clk) begin
-        if (state == DONE) begin
-            for (int i = 0; i < A_ROWS; i++)
-                for (int j = 0; j < V_COLS; j++)
-                    out_mem[i][j] <= accum[i][j];
+        if (next_state == DONE) begin
+            for (int i = 0; i < A_ROWS; i++) begin
+                for (int j = 0; j <V_COLS; j++) begin
+                    logic [WIDTH_OUT-1:0] result;
+                    logic sign_bit = accum[i][j][31];
+                    logic int_bit = accum[i][j][30];
+                    if (sign_bit == int_bit) begin
+                        // In range: take sign bit and top 15 fractional bits
+                        result = {sign_bit, accum[i][j][29:15]};
+                    end else begin
+                        // Out of range: saturate based on sign
+                        result = sign_bit ? 16'h8000 : 16'h7FFF;
+                    end
+                    out_mem[i * V_COLS + j] <= result;
+                end
+            end
         end
     end
 
