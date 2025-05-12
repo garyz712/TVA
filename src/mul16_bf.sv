@@ -8,7 +8,7 @@
 // May 11 2025    Tianwei Liu    Fix fixed-point multiplication
 // May 11 2025    Tianwei Liu    Add clock division
 //------------------------------------------------------------------------------
-module mul16 (
+module mul16_progressive (
     input  logic         clk,
     input  logic         rst_n,
     input  logic [15:0]  a,            // Signed Q0.15 input
@@ -24,11 +24,8 @@ module mul16 (
 );
 
     // Internal signals
-    logic [31:0]  product_full;        // Full 32-bit product (Q1.30 format)
     logic [31:0]  product_comb;        // Full 32-bit product (Q1.30 format)
-    logic [15:0]  product_16;
     logic [15:0]  product16_comb;      // 16-bit product
-    logic [7:0]   product_8;
     logic [7:0]   product8_comb;       // 8-bit product
     // logic [31:0]  product_reg1, product_reg2, product_reg3; // Pipeline registers
     // logic         valid_reg1, valid_reg2, valid_reg3, valid_reg4; // Valid signal pipeline
@@ -43,7 +40,7 @@ module mul16 (
 
     // clock division
     logic clk2, clk4;
-    logic [2:0] div_counter;
+    logic [1:0] div_counter;
 
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -52,8 +49,8 @@ module mul16 (
             div_counter <= '0;
         end else begin
             div_counter <= div_counter + 1;
-            clk2        <= div_counter[1];
-            clk4        <= div_counter[2];
+            clk2        <= div_counter[0];
+            clk4        <= div_counter[1];
         end
     end
 
@@ -115,7 +112,6 @@ module mul16 (
     // Clock 1: Compute Q1.6 output
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            product_8      <= '0;
             q1_6_out       <= 8'b0;
             q1_6_valid     <= 1'b0;
         end else begin
@@ -124,8 +120,7 @@ module mul16 (
 
             // Q1.6 output: Take upper 8 bits (1 integer, 6 fractional, 1 sign)
             // From Q1.30, select bits [30:23] for Q1.6 (shifted to get 6 fractional bits)
-            product_8      <= product8_comb;
-            q1_6_out       <= product_8;
+            q1_6_out       <= product8_comb;
             q1_6_valid     <= valid_in;
         end
     end
@@ -133,15 +128,13 @@ module mul16 (
     // Clock 2: Q1.14 output
     always_ff @(posedge clk2 or negedge rst_n) begin
         if (!rst_n) begin
-            product_16     <= 16'b0;
             q1_14_out      <= 16'b0;
             q1_14_valid    <= 1'b0;
         end else begin
 
             // Q1.14 output: Take upper 16 bits (1 integer, 14 fractional, 1 sign)
             // From Q1.30, select bits [30:15] for Q1.14
-            product_16     <= product_comb16;
-            q1_14_out      <= product_16;
+            q1_14_out      <= product16_comb;
             q1_14_valid    <= valid_arr[0];
         end
     end
@@ -149,13 +142,11 @@ module mul16 (
     // Clock 4: Q1.30 output
     always_ff @(posedge clk4 or negedge rst_n) begin
         if (!rst_n) begin
-            product_full   <= 32'b0;
             q1_30_out      <= 32'b0;
             q1_30_valid    <= 1'b0;
         end else begin
             // Q1.30 output: Full product
-            product_full   <= product_comb;
-            q1_30_out      <= product_full;
+            q1_30_out      <= product_comb;
             q1_30_valid    <= valid_arr[2];
         end
     end

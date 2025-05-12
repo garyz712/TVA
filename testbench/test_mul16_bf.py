@@ -25,7 +25,7 @@ async def test_mul16_progressive(dut):
 
     dut.a.value = a
     dut.b.value = b
-    dut.in_valid.value = 1
+    dut.valid_in.value = 1
 
     # Wait for 1 cycle (Q1.6)
     await RisingEdge(dut.clk)
@@ -42,10 +42,11 @@ async def test_mul16_progressive(dut):
 
     # Wait for 4 cycles total (Q1.30)
     await RisingEdge(dut.clk)
+    await RisingEdge(dut.clk)
     assert dut.q1_30_valid.value == 1, "Q1.30 valid should be high"
     assert dut.q1_30_out.value == expected_q1_30, f"Q1.30 output mismatch: got {hex(dut.q1_30_out.value)}, expected {hex(expected_q1_30)}"
 
-    dut.in_valid.value = 0
+    dut.valid_in.value = 0
     await Timer(20, units="ns")
 
     # Additional random tests
@@ -54,12 +55,13 @@ async def test_mul16_progressive(dut):
         b = random.randint(-32768, 32767)
         dut.a.value = a & 0xFFFF
         dut.b.value = b & 0xFFFF
-        dut.in_valid.value = 1
+        dut.valid_in.value = 1
+        await RisingEdge(dut.clk)
         await RisingEdge(dut.clk)
         await RisingEdge(dut.clk)
         await RisingEdge(dut.clk)
         await RisingEdge(dut.clk)
         product = (a * b) & 0xFFFFFFFF  # Full 32-bit product
         assert dut.q1_30_out.value == product, f"Random test failed: got {hex(dut.q1_30_out.value)}, expected {hex(product)}"
-        dut.in_valid.value = 0
+        dut.valid_in.value = 0
         await Timer(20, units="ns")
