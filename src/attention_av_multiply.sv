@@ -11,21 +11,9 @@
 //  Apr. 11 2025    Tianwei Liu    Refactor in SV, split state machine, add comments
 //  Apr. 30 2025    Max Zhang      Redesigned with pipelined variable-latency multipliers
 //  May. 9 2025    Max Zhang       Redesigned with pipelined variable-latency multipliers with memory tiling
+//  May. 12 2025    Max Zhang       Worked for brute force mul16
 //------------------------------------------------------------------------------
 
-//------------------------------------------------------------------------------
-// attention_av_multiply.sv
-//
-//  This module implements a matrix multiplication for the attention mechanism,
-//  computing A * V with token-wise mixed precision (INT4, INT8, FP16).
-//  Uses pipelined multipliers with variable latency to reduce cycle count
-//  for lower precision tokens, operating at a variable clock frequency.
-//
-//  Apr. 10 2025    Max Zhang      Initial version
-//  Apr. 11 2025    Tianwei Liu    Refactor in SV, split state machine, add comments
-//  Apr. 30 2025    Max Zhang      Redesigned with pipelined variable-latency multipliers
-//  May. 9 2025    Max Zhang       Redesigned with pipelined variable-latency multipliers with memory tiling
-//------------------------------------------------------------------------------
 
 module attention_av_multiply #(
     parameter int A_ROWS = 8,        // Attention matrix column size
