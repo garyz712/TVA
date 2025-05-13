@@ -1,0 +1,1 @@
+This is TVA: a novel Token-aware Vision-transformer Accelerator, an outer-product-based attention inference engine with token-importance-driven mixed-precision quantization, processing each token with unique precision and latency.
