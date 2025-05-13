@@ -136,6 +136,16 @@ module attention_av_multiply #(
             state <= next_state;
     end
 
+    logic tile_ready;
+    always_comb begin
+        tile_ready = 1'b0;
+        for (int i = 0; i < A_ROWS; i++)
+            for (int j = 0; j < TILE_SIZE; j++)
+                tile_ready |= (precision_sel[col_idx]==2'b00) ? out4_valid [i][j] :
+                            (precision_sel[col_idx]==2'b01) ? out8_valid [i][j] :
+                                                                out16_valid[i][j];
+    end
+
 
     // FSM: Next state and control logic
     always_comb begin
@@ -158,9 +168,10 @@ module attention_av_multiply #(
             COMPUTE: begin
                 compute_valid = 1'b1;
                 
-                
-                if (cycle_count >= cycles_needed - 1)
+                if (tile_ready)                      // <-- robustness fix
                     next_state = UPCAST_ACCUM;
+                // if (cycle_count >= cycles_needed - 1)
+                //     next_state = UPCAST_ACCUM;
             end
             UPCAST_ACCUM: begin
                 accum_valid = 1'b1;
