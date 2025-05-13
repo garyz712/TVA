@@ -28,11 +28,11 @@ module matmul_array #(
     // State machine states
     enum logic [1:0] {IDLE, COMPUTE, DONE} state, next_state;
 
-    // Counters for block indices and cycles
+    // Counters for block indices and data feeding
     logic [$clog2(M/4)-1:0] p_counter;  // Row block index for C
     logic [$clog2(N/4)-1:0] q_counter;  // Column block index for C
     logic [$clog2(K/4)-1:0] r_counter;  // Inner dimension block index
-    logic [$clog2(K+4)-1:0] cycle_counter; // Cycle counter for data feeding and pipeline
+    logic [$clog2(K)-1:0]   feed_counter; // Counter for feeding K elements
 
     // PE interconnect signals
     logic [3:0]  a_valid_inter [0:3][0:4]; // Valid signals for A (left to right)
@@ -43,14 +43,12 @@ module matmul_array #(
 
     // Control signals
     logic reset_acc;  // Reset accumulators in PEs
-    logic load_data;  // Load new data into PEs
+    logic block_done; // Indicates when a block computation is complete
 
     // PE instantiation (4x4 grid)
     for (genvar i = 0; i < 4; i++) begin : row
         for (genvar j = 0; j < 4; j++) begin : col
-            systolic_pe #(
-                .WIDTH(WIDTH)
-            ) pe (
+            matmul_pe pe (
                 .clk(clk),
                 .rst_n(rst_n),
                 .reset_acc(reset_acc),
@@ -67,6 +65,14 @@ module matmul_array #(
         end
     end
 
+    // Detect block completion using valid signals from the last column
+    assign block_done = (state == COMPUTE) && 
+                        (&a_valid_inter[0][4] == 0) && 
+                        (&a_valid_inter[1][4] == 0) && 
+                        (&a_valid_inter[2][4] == 0) && 
+                        (&a_valid_inter[3][4] == 0) &&
+                        (feed_counter == K - 1);
+
     // State machine logic
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -74,7 +80,7 @@ module matmul_array #(
             p_counter <= 0;
             q_counter <= 0;
             r_counter <= 0;
-            cycle_counter <= 0;
+            feed_counter <= 0;
             done <= 0;
         end else begin
             state <= next_state;
@@ -82,12 +88,15 @@ module matmul_array #(
                 IDLE: begin
                     if (start) begin
                         next_state <= COMPUTE;
+                        feed_counter <= 0;
                     end
                 end
                 COMPUTE: begin
-                    cycle_counter <= cycle_counter + 1;
-                    if (cycle_counter == K + 3) begin // K cycles + pipeline latency
-                        cycle_counter <= 0;
+                    if (feed_counter < K) begin
+                        feed_counter <= feed_counter + 1;
+                    end
+                    if (block_done) begin
+                        feed_counter <= 0;
                         r_counter <= r_counter + 1;
                         if (r_counter == (K/4) - 1) begin
                             r_counter <= 0;
@@ -104,7 +113,10 @@ module matmul_array #(
                 end
                 DONE: begin
                     done <= 1;
-                    if (!start) next_state <= IDLE; // Wait for reset or new start
+                    if (!start) begin
+                        next_state <= IDLE;
+                        done <= 0;
+                    end
                 end
             endcase
         end
@@ -114,27 +126,33 @@ module matmul_array #(
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             for (int i = 0; i < 4; i++) begin
-                a_valid_inter[i][0] <= 0;
-                b_valid_inter[0][i] <= 0;
-                a_inter[i][0] <= 0;
-                b_inter[0][i] <= 0;
+                for (int j = 0; j < 5; j++) begin
+                    a_valid_inter[i][j] <= 0;
+                    a_inter[i][j] <= 0;
+                end
+                for (int j = 0; j < 4; j++) begin
+                    b_valid_inter[i][j] <= 0;
+                    b_inter[i][j] <= 0;
+                end
             end
         end else if (state == COMPUTE) begin
             for (int i = 0; i < 4; i++) begin
                 // Skewed feeding for A (left edge)
-                if (cycle_counter >= i && cycle_counter < K + i) begin
+                if (feed_counter >= i && feed_counter < K + i) begin
                     a_valid_inter[i][0] <= 1;
-                    a_inter[i][0] <= a_in[(p_counter * 4 + i) * K + (r_counter * 4) + (cycle_counter - i)];
+                    a_inter[i][0] <= a_in[(p_counter * 4 + i) * K + (r_counter * 4) + (feed_counter - i)];
                 end else begin
                     a_valid_inter[i][0] <= 0;
+                    a_inter[i][0] <= 0;
                 end
 
                 // Skewed feeding for B (top edge)
-                if (cycle_counter >= i && cycle_counter < K + i) begin
+                if (feed_counter >= i && feed_counter < K + i) begin
                     b_valid_inter[0][i] <= 1;
-                    b_inter[0][i] <= b_in[(r_counter * 4 + (cycle_counter - i)) * N + (q_counter * 4 + i)];
+                    b_inter[0][i] <= b_in[(r_counter * 4 + (feed_counter - i)) * N + (q_counter * 4 + i)];
                 end else begin
                     b_valid_inter[0][i] <= 0;
+                    b_inter[0][i] <= 0;
                 end
             end
         end
@@ -146,8 +164,8 @@ module matmul_array #(
             reset_acc <= 1;
             for (int i = 0; i < M*N; i++) c_out[i] <= 0;
         end else begin
-            reset_acc <= (state == COMPUTE && cycle_counter == 0 && r_counter == 0);
-            if (state == COMPUTE && cycle_counter == K + 3 && r_counter == (K/4) - 1) begin
+            reset_acc <= (state == COMPUTE && feed_counter == 0 && r_counter == 0);
+            if (block_done && r_counter == (K/4) - 1) begin
                 for (int i = 0; i < 4; i++) begin
                     for (int j = 0; j < 4; j++) begin
                         c_out[(p_counter * 4 + i) * N + (q_counter * 4 + j)] <= c_pe[i][j];

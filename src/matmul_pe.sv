@@ -42,15 +42,11 @@ module matmul_pe (
     mul16_progressive mul (
         .clk(clk),
         .rst_n(rst_n),
-        .in_valid(a_valid_in & b_valid_in),
+        .valid_in(a_valid_in & b_valid_in),
         .a(a_in),
         .b(b_in),
-        .out4_valid(),  // Not used
-        .p4(),          // Not used
-        .out8_valid(),  // Not used
-        .p8(),          // Not used
-        .out16_valid(out16_valid),
-        .p16(p16)
+        .q1_30_valid(out16_valid),
+        .q1_30_out(p16)
     );
 
     // Accumulator
