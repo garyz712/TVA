@@ -1,5 +1,5 @@
 //------------------------------------------------------------------------------
-// mul16_bf.sv
+// mul16.sv
 //
 // Signed Q0.15 (Q0.3, Q0.8) multiplier brute force version
 // Not optimized for efficiency AT ALL. Just use for test.
