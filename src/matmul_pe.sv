@@ -2,7 +2,7 @@
 // matmul_pe.sv
 //
 // One processing element of the matmul systolic array. Uses the mul16 component
-// to compute the 16x16 bit multiplication in 4 cycles.
+// to compute the 16x16 bit multiplication in multiple cycles.
 //
 // May 9 2025    Tianwei Liu    Initial version
 //------------------------------------------------------------------------------
@@ -18,7 +18,8 @@ module matmul_pe (
     output logic [15:0] a_out,        // 16-bit output to right
     output logic        b_valid_out,  // Valid signal to bottom
     output logic [15:0] b_out,        // 16-bit output to bottom
-    output logic [31:0] c_out         // Accumulated result
+    output logic [31:0] c_out,        // Accumulated result
+    output logic        out16_valid   // Multiplier output valid signal
 );
 
     // Register inputs and pass to outputs
@@ -37,7 +38,6 @@ module matmul_pe (
     end
 
     // Multiplier instantiation
-    logic        out16_valid;
     logic [31:0] p16;
     mul16_progressive mul (
         .clk(clk),
