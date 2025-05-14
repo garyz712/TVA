@@ -14,166 +14,136 @@
 module matmul_array #(
     parameter int M = 16,        // Rows of matrix A
     parameter int K = 16,        // Columns of A, rows of B
-    parameter int N = 16,        // Columns of matrix B
-    parameter int WIDTH = 16     // Bit width of matrix elements
+    parameter int N = 16         // Columns of matrix B
 ) (
     input  logic                  clk,
     input  logic                  rst_n,
     input  logic                  start,
-    input  logic [WIDTH-1:0]      a_in [0:M*K-1],  // Flattened matrix A
-    input  logic [WIDTH-1:0]      b_in [0:K*N-1],  // Flattened matrix B
-    output logic [31:0]           c_out [0:M*N-1], // Flattened matrix C (32-bit to hold accumulation)
+    input  logic signed [15:0]    a_in [0:M*K-1],  // Flattened matrix A
+    input  logic signed [15:0]    b_in [0:K*N-1],  // Flattened matrix B
+    output logic signed [31:0]    c_out [0:M*N-1], // Flattened matrix C
     output logic                  done
 );
 
     // State machine states
-    enum logic [1:0] {IDLE, COMPUTE, DONE} state, next_state;
+    typedef enum logic [1:0] {
+        IDLE  = 2'b00,
+        LOAD  = 2'b01,
+        COMPUTE = 2'b10,
+        DONE  = 2'b11
+    } state_t;
 
-    // Counters for block indices and data feeding
-    logic [$clog2(M/4)-1:0] p_counter;  // Row block index for C
-    logic [$clog2(N/4)-1:0] q_counter;  // Column block index for C
-    logic [$clog2(K/4)-1:0] r_counter;  // Inner dimension block index
-    logic [$clog2(4)-1:0]   inner_feed_counter; // Counter for feeding 4 elements per block
+    state_t state, next_state;
 
-    // PE interconnect signals
-    logic a_valid_inter [0:3][0:4]; // Valid signals for A (left to right)
-    logic [WIDTH-1:0] a_inter [0:3][0:4];  // Data for A
-    logic b_valid_inter [0:4][0:3]; // Valid signals for B (top to bottom)
-    logic [WIDTH-1:0] b_inter [0:4][0:3];  // Data for B
-    logic [31:0] c_pe [0:3][0:3];          // Accumulated results from PEs
-    logic out16_valid_pe [0:3][0:3];       // Multiplier valid signals from PEs
+    // Internal signals
+    logic signed [15:0] a_reg [0:M*K-1]; // Register to hold matrix A
+    logic signed [15:0] b_reg [0:K*N-1]; // Register to hold matrix B
+    logic signed [31:0] c_temp [0:M*N-1]; // Temporary result storage
+    logic [31:0] cycle_count; // Counter for computation cycles
+    logic done_int; // Internal done signal
 
-    // Control signals
-    logic reset_acc;  // Reset accumulators in PEs
-    logic block_done; // Indicates when a block computation is complete
-
-    // PE instantiation (4x4 grid)
-    for (genvar i = 0; i < 4; i++) begin : row
-        for (genvar j = 0; j < 4; j++) begin : col
-            matmul_pe pe (
-                .clk(clk),
-                .rst_n(rst_n),
-                .reset_acc(reset_acc),
-                .a_valid_in(a_valid_inter[i][j]),
-                .a_in(a_inter[i][j]),
-                .b_valid_in(b_valid_inter[i][j]),
-                .b_in(b_inter[i][j]),
-                .a_valid_out(a_valid_inter[i][j+1]),
-                .a_out(a_inter[i][j+1]),
-                .b_valid_out(b_valid_inter[i+1][j]),
-                .b_out(b_inter[i+1][j]),
-                .c_out(c_pe[i][j]),
-                .out16_valid(out16_valid_pe[i][j])
-            );
-        end
-    end
-
-    // Detect block completion using PE valid signals
-    logic all_pe_valid;
-    assign all_pe_valid = &{out16_valid_pe[0][0], out16_valid_pe[0][1], out16_valid_pe[0][2], out16_valid_pe[0][3],
-                            out16_valid_pe[1][0], out16_valid_pe[1][1], out16_valid_pe[1][2], out16_valid_pe[1][3],
-                            out16_valid_pe[2][0], out16_valid_pe[2][1], out16_valid_pe[2][2], out16_valid_pe[2][3],
-                            out16_valid_pe[3][0], out16_valid_pe[3][1], out16_valid_pe[3][2], out16_valid_pe[3][3]};
-    assign block_done = (state == COMPUTE) && (inner_feed_counter == 3) && all_pe_valid;
-
-    // State machine logic
+    // State machine: Sequential logic
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             state <= IDLE;
-            p_counter <= 0;
-            q_counter <= 0;
-            r_counter <= 0;
-            inner_feed_counter <= 0;
+            cycle_count <= 0;
             done <= 0;
         end else begin
             state <= next_state;
-            case (state)
-                IDLE: begin
-                    if (start) begin
-                        next_state <= COMPUTE;
-                        inner_feed_counter <= 0;
-                    end
-                end
-                COMPUTE: begin
-                    if (inner_feed_counter < 3) begin
-                        inner_feed_counter <= inner_feed_counter + 1;
-                    end else if (block_done) begin
-                        inner_feed_counter <= 0;
-                        r_counter <= r_counter + 1;
-                        if (r_counter == (K/4) - 1) begin
-                            r_counter <= 0;
-                            q_counter <= q_counter + 1;
-                            if (q_counter == (N/4) - 1) begin
-                                q_counter <= 0;
-                                p_counter <= p_counter + 1;
-                                if (p_counter == (M/4) - 1) begin
-                                    next_state <= DONE;
-                                end
-                            end
-                        end
-                    end
-                end
-                DONE: begin
-                    done <= 1;
-                    if (!start) begin
-                        next_state <= IDLE;
-                        done <= 0;
-                    end
-                end
-            endcase
+            if (state == COMPUTE)
+                cycle_count <= cycle_count + 1;
+            else
+                cycle_count <= 0;
+            done <= done_int;
         end
     end
 
-    // Data feeding with skew
+    // State machine: Next state and output logic
+    always_comb begin
+        next_state = state;
+        done_int = 0;
+
+        case (state)
+            IDLE: begin
+                if (start)
+                    next_state = LOAD;
+            end
+            LOAD: begin
+                next_state = COMPUTE;
+            end
+            COMPUTE: begin
+                if (cycle_count == K-1)
+                    next_state = DONE;
+            end
+            DONE: begin
+                done_int = 1;
+                next_state = IDLE;
+            end
+            default: next_state = IDLE;
+        endcase
+    end
+
+    // Load input matrices into registers
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            for (int i = 0; i < 4; i++) begin
-                for (int j = 0; j < 5; j++) begin
-                    a_valid_inter[i][j] <= 0;
-                    a_inter[i][j] <= 0;
-                end
-                for (int j = 0; j < 4; j++) begin
-                    b_valid_inter[i][j] <= 0;
-                    b_inter[i][j] <= 0;
-                end
+            for (int i = 0; i < M*K; i++)
+                a_reg[i] <= 0;
+            for (int i = 0; i < K*N; i++)
+                b_reg[i] <= 0;
+        end else if (state == LOAD) begin
+            a_reg <= a_in;
+            b_reg <= b_in;
+        end
+    end
+
+    function automatic logic signed [31:0] sat_add32
+            (input  logic signed [31:0] a,
+            input  logic signed [31:0] b);
+
+        logic signed [31:0] sum;
+        logic               ovf;
+        begin
+            sum = a + b;                              // 32-bit two's-complement add
+            ovf = (a[31] == b[31]) && (sum[31] != a[31]);
+
+            if (!ovf) begin
+                sat_add32 = sum;                      // no overflow → pass through
+            end else if (a[31] == 0) begin            // operands were positive
+                sat_add32 = 32'h7FFF_FFFF;            // clamp to +0.999 999 999 (Q2.30)
+            end else begin                            // operands were negative
+                sat_add32 = 32'h8000_0000;            // clamp to –1.0
             end
+        end
+    endfunction
+
+    // Matrix multiplication logic
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            for (int i = 0; i < M*N; i++)
+                c_temp[i] <= 0;
+        end else if (state == LOAD) begin
+            // Initialize c_temp to zero
+            for (int i = 0; i < M*N; i++)
+                c_temp[i] <= 0;
         end else if (state == COMPUTE) begin
-            for (int i = 0; i < 4; i++) begin
-                // Skewed feeding for A (left edge)
-                if (inner_feed_counter >= i && inner_feed_counter < 4) begin
-                    a_valid_inter[i][0] <= 1;
-                    a_inter[i][0] <= a_in[(p_counter * 4 + i) * K + (r_counter * 4) + (inner_feed_counter - i)];
-                end else begin
-                    a_valid_inter[i][0] <= 0;
-                    a_inter[i][0] <= 0;
-                end
-
-                // Skewed feeding for B (top edge)
-                if (inner_feed_counter >= i && inner_feed_counter < 4) begin
-                    b_valid_inter[0][i] <= 1;
-                    b_inter[0][i] <= b_in[(r_counter * 4 + (inner_feed_counter - i)) * N + (q_counter * 4 + i)];
-                end else begin
-                    b_valid_inter[0][i] <= 0;
-                    b_inter[0][i] <= 0;
+            // Perform one step of the dot product for each element of C
+            for (int i = 0; i < M; i++) begin
+                for (int j = 0; j < N; j++) begin
+                    // Compute c_temp[i*N+j] += a_reg[i*K+k] * b_reg[k*N+j]
+                    c_temp[i*N+j] <= sat_add32 (c_temp[i*N+j],
+                        a_reg[i*K+cycle_count[31:0]] * b_reg[cycle_count[31:0]*N+j]);
                 end
             end
         end
     end
 
-    // Accumulator reset and result collection
+    // Assign output
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            reset_acc <= 1;
-            for (int i = 0; i < M*N; i++) c_out[i] <= 0;
-        end else begin
-            reset_acc <= (state == COMPUTE && r_counter == 0 && inner_feed_counter == 0);
-            if (block_done && r_counter == (K/4) - 1) begin
-                for (int i = 0; i < 4; i++) begin
-                    for (int j = 0; j < 4; j++) begin
-                        c_out[(p_counter * 4 + i) * N + (q_counter * 4 + j)] <= c_pe[i][j];
-                    end
-                end
-            end
+            for (int i = 0; i < M*N; i++)
+                c_out[i] <= 0;
+        end else if (state == DONE) begin
+            c_out <= c_temp;
         end
     end
 
