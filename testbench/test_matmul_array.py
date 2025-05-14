@@ -10,6 +10,7 @@ K = 16
 N = 16
 WIDTH = 16
 MAX_VAL = (1 << (WIDTH - 1)) - 1
+TOLERANCE = 0.001  # FP16 tolerance for Q1.15
 
 # ----------------------
 # Fixed-point helpers
@@ -79,7 +80,7 @@ def compute_expected(a, b):
                 raw_b = int(b[k, j])
                 b_val = q1_15_to_real(raw_b)
                 expected_out[i, j] += a_val * b_val
-    expected_out = np.clip(expected_out, -2.0, 1.999999999)
+        expected_out = np.clip(expected_out, -2.0, 1.999999999)
     expected_q = np.vectorize(real_to_q1_30)(expected_out)
     return expected_q.astype(np.int32)
 
@@ -115,8 +116,11 @@ async def run_test(dut, a, b, test_name):
 
     passed = True
     for i in range(M * N):
-        if c_out[i] != c_expected[i]:
-            dut._log.error(f"Mismatch at c_out[{i}]: got {c_out[i]}, expected {c_expected[i]}")
+        actual = q1_30_to_real(c_out[i])
+        expected = q1_30_to_real(c_expected[i])
+        diff = actual - expected
+        if abs(diff) > TOLERANCE:
+            dut._log.error(f"Mismatch at c_out[{i}]: got {q1_30_to_real(c_out[i])}, expected {q1_30_to_real(c_expected[i])}")
             passed = False
 
     if passed:

@@ -116,6 +116,29 @@ module matmul_array #(
         end
     endfunction
 
+
+    function automatic logic signed [31:0] fp_mul
+            (input  logic signed [15:0] a,
+            input  logic signed [15:0] b);
+
+        logic [31:0] expand_a;
+        logic [31:0] expand_a_tc;
+        begin
+            fp_mul = '0;
+            expand_a     = {{16{a[15]}}, a};
+            expand_a_tc  = ~expand_a + 1;
+            for (int i = 0; i < 16; ++i) begin
+                if (i != 15 && b[i] == 1) begin
+                    fp_mul += (expand_a << i);
+                end
+                if (i == 15 && b[i] == 1) begin
+                    fp_mul += (expand_a_tc << i);
+                end
+            end
+        end
+    endfunction
+
+
     // Matrix multiplication logic
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -131,7 +154,7 @@ module matmul_array #(
                 for (int j = 0; j < N; j++) begin
                     // Compute c_temp[i*N+j] += a_reg[i*K+k] * b_reg[k*N+j]
                     c_temp[i*N+j] <= sat_add32 (c_temp[i*N+j],
-                        a_reg[i*K+cycle_count[31:0]] * b_reg[cycle_count[31:0]*N+j]);
+                        fp_mul(a_reg[i*K+cycle_count[31:0]] , b_reg[cycle_count[31:0]*N+j]));
                 end
             end
         end
