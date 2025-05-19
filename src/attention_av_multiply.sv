@@ -12,6 +12,7 @@
 //  Apr. 30 2025    Max Zhang      Redesigned with pipelined variable-latency multipliers
 //  May. 9 2025    Max Zhang       Redesigned with pipelined variable-latency multipliers with memory tiling
 //  May. 12 2025    Max Zhang       Worked for brute force mul16
+//  May. 18 2025    Tianwei Liu    Bug fix, compute & check valid in correct stage
 //------------------------------------------------------------------------------
 
 
@@ -71,8 +72,6 @@ module attention_av_multiply #(
     logic                  out4_valid [A_ROWS][TILE_SIZE];
     logic                  out8_valid [A_ROWS][TILE_SIZE];
     logic                  out16_valid [A_ROWS][TILE_SIZE];
-    logic [31:0]           cycle_count;              // Cycle counter
-    logic [31:0]           cycles_needed;            // Cycles for current column
     logic [31:0]           tile_idx;                 // Current tile index
     logic [31:0]           col_idx;                  // Current column index
     logic                  compute_valid;             // Compute enable
@@ -118,16 +117,6 @@ module attention_av_multiply #(
         end
     end
 
-    // Determine cycles needed for current column's precision
-    always_comb begin
-        case (precision_sel[col_idx])
-            2'b00: cycles_needed = CYCLES_INT4; // INT4: 1 cycle
-            2'b01: cycles_needed = CYCLES_INT8; // INT8: 2 cycles
-            2'b10: cycles_needed = CYCLES_FP16; // FP16: 4 cycles
-            default: cycles_needed = CYCLES_FP16;
-        endcase
-    end
-
     // FSM: State register
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n)
@@ -168,14 +157,11 @@ module attention_av_multiply #(
             COMPUTE: begin
                 compute_valid = 1'b1;
                 
-                if (tile_ready)                      // <-- robustness fix
-                    next_state = UPCAST_ACCUM;
-                // if (cycle_count >= cycles_needed - 1)
-                //     next_state = UPCAST_ACCUM;
+                next_state = UPCAST_ACCUM;
             end
             UPCAST_ACCUM: begin
                 accum_valid = 1'b1;
-                next_state = STORE_TILE;
+                next_state = tile_ready ? STORE_TILE : UPCAST_ACCUM;
             end
             STORE_TILE: begin
                 if (tile_idx == NUM_TILES - 1) begin
@@ -196,18 +182,6 @@ module attention_av_multiply #(
         endcase
     end
 
-    // Cycle counter
-    always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n)
-            cycle_count <= 0;
-        else if (state == COMPUTE) begin
-            if (cycle_count < cycles_needed - 1)
-                cycle_count <= cycle_count + 1;
-            else
-                cycle_count <= 0;
-        end else
-            cycle_count <= 0;
-    end
 
     // Column index
     always_ff @(posedge clk or negedge rst_n) begin
@@ -291,11 +265,7 @@ module attention_av_multiply #(
                         // 2'b10: result = $signed(p16[i][j]); // Q1.30 truncated to Q1.15
                         default: result = 0;
                     endcase
-                    valid =
-                        (precision_sel[col_idx]==2'b00) ? out4_valid[i][j] :
-                        (precision_sel[col_idx]==2'b01) ? out8_valid[i][j] :
-                                                        out16_valid[i][j];
-                    if (valid) begin
+                    if (tile_ready) begin
                         accum[i][tile_idx*TILE_SIZE+j] <= sat_add32(accum[i][tile_idx*TILE_SIZE+j], result);
                         //accum[i][tile_idx*TILE_SIZE+j] <= accum[i][tile_idx*TILE_SIZE+j] + result;
                     end

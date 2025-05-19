@@ -28,7 +28,7 @@ def real_to_q1_15(x):
     if val < -32768:
         val = -32768
     # Explicitly cast to np.int16 to handle overflow
-    return np.array(val).astype(np.int16) & 0xFFFF
+    return np.array(val).astype(np.int16)
 
 def q1_15_to_real(x):
     value = np.array(int(x) & 0xFFFF).astype(np.int16)

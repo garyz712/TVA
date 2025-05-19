@@ -8,6 +8,7 @@
 // May 11 2025    Tianwei Liu    Fix fixed-point multiplication
 // May 11 2025    Tianwei Liu    Add clock division
 // May 12 2025    Tianwei Liu    Fix clock division alighment
+// May 18 2025    Tianwei Liu    Make pipelined
 //------------------------------------------------------------------------------
 module mul16_progressive (
     input  logic         clk,
@@ -24,262 +25,152 @@ module mul16_progressive (
     output logic         q1_30_valid
 );
 
-    // Internal signals
-    logic [31:0]  product_comb;        // Full 32-bit product (Q1.30 format)
-    logic [15:0]  product16_comb;      // 16-bit product
-    logic [7:0]   product8_comb;       // 8-bit product
-    // logic [31:0]  product_reg1, product_reg2, product_reg3; // Pipeline registers
-    // logic         valid_reg1, valid_reg2, valid_reg3, valid_reg4; // Valid signal pipeline
-    logic valid_1;
-    logic valid_2;
-    logic valid_4;
+    // Function for 16x4 multiplication (b is unsigned)
+    function automatic logic signed [19:0] fp_mul_unsigned
+            (input logic signed [15:0] a,
+             input logic [3:0] b); // Treat b as unsigned
 
-    logic [31:0] expand_a;
-    logic [31:0] expand_a_tc;
-    logic [15:0] expand_a16;
-    logic [15:0] expand_a_tc16;
-    logic [7:0]  expand_a8;
-    logic [7:0]  expand_a_tc8;
+        logic signed [19:0] result;
+        logic signed [19:0] expand_a;
+        begin
+            result = '0;
+            expand_a = {{4{a[15]}}, a}; // Sign-extend a to 20 bits
+            for (int i = 0; i < 4; ++i) begin
+                if (b[i] == 1) begin
+                    result += (expand_a << i);
+                end
+            end
+            fp_mul_unsigned = result;
+        end
+    endfunction
 
-    // clock division
-    logic clk2, clk4;
-    logic [1:0] div_counter;
+    function automatic logic signed [19:0] fp_mul
+            (input logic signed [15:0] a,
+             input logic signed [3:0] b); // Treat b as signed
 
-    always_ff @(posedge clk or negedge rst_n) begin
+        logic signed [19:0] result;
+        logic signed [19:0] expand_a;
+        logic signed [19:0] expand_a_tc;
+        begin
+            result = '0;
+            expand_a = {{4{a[15]}}, a}; // Sign-extend a to 20 bits
+            expand_a_tc = ~expand_a + 1;
+            for (int i = 0; i < 4; ++i) begin
+                if (b[i] == 1) begin
+                    result += i == 3 ? (expand_a_tc << i) : (expand_a << i);
+                end
+            end
+            fp_mul = result;
+        end
+    endfunction
+
+    // Internal registers for pipelining
+    logic [15:0] a_reg1, a_reg2, a_reg3, a_reg4;
+    logic [15:0] b_reg1, b_reg2, b_reg3, b_reg4;
+    logic [4:0]  valid_reg;
+
+    // Partial product registers
+    logic signed [19:0] pp1, pp1s, pp2, pp2s, pp3, pp4; // 16x4 multiplication results
+    logic signed [31:0] accum1, accum2, accum3, accum4;
+    logic signed [31:0] result1, result2;
+
+
+    // Stage 1: First 16x4 multiplication (b[3:0])
+    always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            clk2        <= 0;
-            clk4        <= 0;
-            div_counter <= '0;
+            a_reg1 <= 0;
+            b_reg1 <= 0;
+            valid_reg[0] <= 0;
+            pp1 <= 0;
+            accum1 <= 0;
         end else begin
-            div_counter <= div_counter + 1;
-            clk2        <= div_counter[0];
-            clk4        <= ~div_counter[1];
+            a_reg1 <= a;
+            b_reg1 <= b;
+            valid_reg[0] <= valid_in;
+            
+            // Compute partial product: a * b[3:0] (b unsigned)
+            pp1 <= fp_mul_unsigned(a, b[3:0]);
+            pp1s <= fp_mul(a, b[3:0]);
+            accum1 <= $signed(pp1); // Store first partial product
+            result1 <= $signed(pp1s);
         end
     end
 
-    // comb logic to compute 8 bit output (1 cycle)
-    always_comb begin
-        product8_comb = '0;
-        expand_a8     = {{4{a[3]}}, a[3:0]};
-        expand_a_tc8  = ~expand_a8 + 1;
-        for (int i = 0; i < 4; ++i) begin
-            if (i != 3 && b[i] == 1) begin
-                product8_comb += (expand_a8 << i);
-            end
-            if (i == 3 && b[i] == 1) begin
-                product8_comb += (expand_a_tc8 << i);
-            end
-        end
-    end
+    // Q1.6 output (truncate to 1 integer, 6 fractional bits)
+    // For stage 1, we approximate without sign correction (partial result)
+    assign q1_6_out = result1[7:0];
+    assign q1_6_valid = valid_reg[1];
 
-    // comb logic to compute 16 bit output (2 cycle)
-    always_comb begin
-        product16_comb = '0;
-        expand_a16     = {{8{a[7]}}, a[7:0]};
-        expand_a_tc16  = ~expand_a16 + 1;
-        for (int i = 0; i < 8; ++i) begin
-            if (i != 7 && b[i] == 1) begin
-                product16_comb += (expand_a16 << i);
-            end
-            if (i == 7 && b[i] == 1) begin
-                product16_comb += (expand_a_tc16 << i);
-            end
-        end
-    end
-
-    // comb logic to compute 32 bit output (4 cycle)
-    always_comb begin
-        product_comb = '0;
-        expand_a     = {{16{a[15]}}, a};
-        expand_a_tc  = ~expand_a + 1;
-        for (int i = 0; i < 16; ++i) begin
-            if (i != 15 && b[i] == 1) begin
-                product_comb += (expand_a << i);
-            end
-            if (i == 15 && b[i] == 1) begin
-                product_comb += (expand_a_tc << i);
-            end
-        end
-    end
-
-    // Clock 1: Compute Q1.6 output
-    always_ff @(posedge clk or negedge rst_n) begin
+    // Stage 2: Second 16x4 multiplication (b[7:4]) and accumulation
+    always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            q1_6_out       <= 8'b0;
-            q1_6_valid     <= 1'b0;
+            a_reg2 <= 0;
+            b_reg2 <= 0;
+            valid_reg[1] <= 0;
+            pp2 <= 0;
+            accum2 <= 0;
         end else begin
-            // Compute 16-bit x 16-bit signed multiplication
-            // product_full   <= $signed(a) * $signed(b); // Q0.15 * Q0.15 = Q1.30
-
-            // Q1.6 output: Take upper 8 bits (1 integer, 6 fractional, 1 sign)
-            // From Q1.30, select bits [30:23] for Q1.6 (shifted to get 6 fractional bits)
-            q1_6_out       <= product8_comb;
-            q1_6_valid     <= valid_in;
+            a_reg2 <= a_reg1;
+            b_reg2 <= b_reg1;
+            valid_reg[1] <= valid_reg[0];
+            
+            // Compute partial product: a * b[7:4], shift left by 4
+            pp2 <= fp_mul_unsigned(a_reg1, b_reg1[7:4]);
+            pp2s <= fp_mul(a_reg1, b_reg1[7:4]);
+            accum2 <= $signed(accum1) + ($signed(pp2) << 4);
+            result2 <= $signed(accum1) + ($signed(pp2s) << 4);
         end
     end
 
-    // Clock 2: Q1.14 output
-    always_ff @(posedge clk2 or negedge rst_n) begin
+    // Q1.14 output (truncate to 1 integer, 14 fractional bits)
+    // Still approximate, as sign correction is applied later
+    assign q1_14_out = result2[15:0]; // Bit 18 to 3 (14 fractional)
+    assign q1_14_valid = valid_reg[2];
+
+    // Stage 3: Third 16x4 multiplication (b[11:8]) and accumulation
+    always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            q1_14_out      <= 16'b0;
-            q1_14_valid    <= 1'b0;
+            a_reg3 <= 0;
+            b_reg3 <= 0;
+            valid_reg[2] <= 0;
+            pp3 <= 0;
+            accum3 <= 0;
         end else begin
-
-            // Q1.14 output: Take upper 16 bits (1 integer, 14 fractional, 1 sign)
-            // From Q1.30, select bits [30:15] for Q1.14
-            q1_14_out      <= product16_comb;
-            q1_14_valid    <= valid_in;
+            a_reg3 <= a_reg2;
+            b_reg3 <= b_reg2;
+            valid_reg[2] <= valid_reg[1];
+            
+            // Compute partial product: a * b[11:8], shift left by 8
+            pp3 <= fp_mul_unsigned(a_reg2, b_reg2[11:8]);
+            accum3 <= $signed(accum2) + ($signed(pp3) << 8);
         end
     end
 
-    // Clock 4: Q1.30 output
-    always_ff @(posedge clk4 or negedge rst_n) begin
+    // Stage 4: Fourth 16x4 multiplication (b[15:12]) and final accumulation
+    always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            q1_30_out      <= 32'b0;
-            q1_30_valid    <= 1'b0;
+            a_reg4 <= 0;
+            b_reg4 <= 0;
+            valid_reg[3] <= 0;
+            valid_reg[4] <= 0;
+            pp4 <= 0;
+            accum4 <= 0;
         end else begin
-            // Q1.30 output: Full product
-            q1_30_out      <= product_comb;
-            q1_30_valid    <= valid_in;
+            a_reg4 <= a_reg3;
+            b_reg4 <= b_reg3;
+            valid_reg[3] <= valid_reg[2];
+            valid_reg[4] <= valid_reg[3];
+            
+            // Compute partial product: a * b[15:12], shift left by 12
+            pp4 <= fp_mul(a_reg3, b_reg3[15:12]);
+            accum4 <= $signed(accum3) + ($signed(pp4) << 12);
         end
+
     end
+
+
+    // Q1.30 output (1 integer, 30 fractional bits)
+    assign q1_30_out = accum4; // Full 32-bit result
+    assign q1_30_valid = valid_reg[4];
 
 endmodule
-
-
-// module mul16_progressive (
-//     input  logic         clk,
-//     input  logic         rst_n,
-//     input  logic [15:0]  a,            // Signed Q0.15 input
-//     input  logic [15:0]  b,            // Signed Q0.15 input
-//     input  logic         valid_in,
-
-//     output logic [7:0]   q1_6_out,     // Q1.6 output (1 integer, 6 fractional)
-//     output logic         q1_6_valid,
-//     output logic [15:0]  q1_14_out,    // Q1.14 output (1 integer, 14 fractional)
-//     output logic         q1_14_valid,
-//     output logic [31:0]  q1_30_out,    // Q1.30 output (1 integer, 30 fractional)
-//     output logic         q1_30_valid
-// );
-
-//     // Internal signals
-//     logic [31:0]  product_full;        // Full 32-bit product (Q1.30 format)
-//     logic [7:0]   product_comb4;        // Full 32-bit product (Q1.30 format)
-//     logic [15:0]  product_comb8;        // Full 32-bit product (Q1.30 format)
-//     logic [31:0]  product_comb16;        // Full 32-bit product (Q1.30 format)
-//     logic [31:0]  product_reg1, product_reg2, product_reg3; // Pipeline registers
-//     logic         valid_reg1, valid_reg2, valid_reg3, valid_reg4; // Valid signal pipeline
-
-//     logic [7:0] expand_a4;
-//     logic [7:0] expand_a_tc4;
-//     logic [15:0] expand_a8;
-//     logic [15:0] expand_a_tc8;
-//     logic [31:0] expand_a16;
-//     logic [31:0] expand_a_tc16;
-
-//     always_comb begin
-//         product_comb4 = '0;
-//         expand_a4     = a[7:0];
-//         expand_a_tc4  = ~expand_a4 + 1;
-//         for (int i = 0; i < 4; ++i) begin
-//             if (i != 3 && b[i] == 1) begin
-//                 product_comb4 += (expand_a4 << i);
-//             end
-//             if (i == 3 && b[i] == 1) begin
-//                 product_comb4 += (expand_a_tc4 << i);
-//             end
-//         end
-//     end
-
-//     always_comb begin
-//         product_comb8 = '0;
-//         expand_a8     = a;
-//         expand_a_tc8  = ~expand_a8 +1;
-//         for (int i = 0; i < 8; ++i) begin
-//             if (i != 7 && b[i] == 1) begin
-//                 product_comb8 += (expand_a8 << i);
-//             end
-//             if (i == 7 && b[i] == 1) begin
-//                 product_comb8 += (expand_a_tc8 << i);
-//             end
-//         end
-//     end
-
-//     always_comb begin
-//         product_comb16 = '0;
-//         expand_a16     = {{16{a[15]}}, a};
-//         expand_a_tc16  = ~expand_a16 + 1;
-//         for (int i = 0; i < 16; ++i) begin
-//             if (i != 15 && b[i] == 1) begin
-//                 product_comb16 += (expand_a16 << i);
-//             end
-//             if (i == 15 && b[i] == 1) begin
-//                 product_comb16 += (expand_a_tc16 << i);
-//             end
-//         end
-//     end
-
-
-//     // Stage 1: Compute full product (Q1.30) and Q1.6 output
-//     always_ff @(posedge clk or negedge rst_n) begin
-//         if (!rst_n) begin
-//             product_full   <= 32'b0;
-//             product_reg1   <= 32'b0;
-//             q1_6_out       <= 8'b0;
-//             q1_6_valid     <= 1'b0;
-//             valid_reg1     <= 1'b0;
-//         end else begin
-//             // Compute 16-bit x 16-bit signed multiplication
-//             product_full   <= {{24{product_comb4[7]}}, product_comb4};
-//             product_reg1   <= product_full;
-//             valid_reg1     <= valid_in;
-
-//             // Q1.6 output: Take lower 8 bits (1 integer, 6 fractional, 1 sign)
-//             q1_6_out       <= product_comb4;
-//             q1_6_valid     <= valid_in;
-//         end
-//     end
-
-//     // Stage 2: Q1.14 output
-//     always_ff @(posedge clk or negedge rst_n) begin
-//         if (!rst_n) begin
-//             product_reg2   <= 32'b0;
-//             q1_14_out      <= 16'b0;
-//             q1_14_valid    <= 1'b0;
-//             valid_reg2     <= 1'b0;
-//         end else begin
-//             product_reg2   <= product_reg1;
-//             valid_reg2     <= valid_reg1;
-
-//             // Q1.14 output: Take lower 16 bits (1 integer, 14 fractional, 1 sign)
-//             q1_14_out      <= product_comb8;
-//             q1_14_valid    <= valid_reg1;
-//         end
-//     end
-
-//     // Stage 3: Pipeline for Q1.30
-//     always_ff @(posedge clk or negedge rst_n) begin
-//         if (!rst_n) begin
-//             product_reg3   <= 32'b0;
-//             valid_reg3     <= 1'b0;
-//         end else begin
-//             product_reg3   <= product_reg2;
-//             valid_reg3     <= valid_reg2;
-//         end
-//     end
-
-//     // Stage 4: Q1.30 output
-//     always_ff @(posedge clk or negedge rst_n) begin
-//         if (!rst_n) begin
-//             q1_30_out      <= 32'b0;
-//             q1_30_valid    <= 1'b0;
-//             valid_reg4     <= 1'b0;
-//         end else begin
-//             // Q1.30 output: Full product
-//             q1_30_out      <= product_comb16;
-//             q1_30_valid    <= valid_reg3;
-//             valid_reg4     <= valid_reg3;
-//         end
-//     end
-
-// endmodule

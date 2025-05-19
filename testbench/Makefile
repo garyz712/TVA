@@ -4,14 +4,17 @@
 SIM ?= verilator
 TOPLEVEL_LANG ?= verilog
 
-VERILOG_SOURCES += $(PWD)/../src/matmul_array.sv
+EXTRA_ARGS += --trace --trace-structs
+
+VERILOG_SOURCES += $(PWD)/../src/attention_av_multiply.sv
+VERILOG_SOURCES += $(PWD)/../src/mul16.sv
 # use VHDL_SOURCES for VHDL files
 
 # TOPLEVEL is the name of the toplevel module in your Verilog or VHDL file
-TOPLEVEL = matmul_array
+TOPLEVEL = attention_av_multiply
 
 # MODULE is the basename of the Python test file
-MODULE = test_matmul_array
+MODULE = test_attention_av_multiply
 
 # include cocotb's make rules to take care of the simulator setup
 include $(shell cocotb-config --makefiles)/Makefile.sim
