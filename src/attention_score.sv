@@ -32,19 +32,27 @@ module attention_score #(
     // Local parameters
     localparam int MATMUL_OUT_WIDTH = 32;  // Output width of matmul (2*DATA_WIDTH)
     
+    // Calculate 1/sqrt(E) at compile time for any value of E
+    // Use real arithmetic during synthesis, then convert to Q15 fixed point
+    localparam real INV_SQRT_E_REAL = 1.0 / $sqrt(real'(E));
+    localparam logic [15:0] INV_SQRT_E_Q15 = $rtoi(INV_SQRT_E_REAL * (2**15));
+    
     // State machine states
-    typedef enum logic [1:0] {
-        IDLE = 2'd0,
-        MATMUL = 2'd1,
-        DONE = 2'd2
+    typedef enum logic [2:0] {
+        IDLE = 3'd0,
+        MATMUL = 3'd1,
+        DIVIDE = 3'd2,
+        DONE = 3'd3
     } state_t;
     
     state_t state, next_state;
     
     // Internal signals
     logic [MATMUL_OUT_WIDTH-1:0] matmul_out [0:L*N*L-1];
+    logic [MATMUL_OUT_WIDTH-1:0] divided_out [0:L*N*L-1];
     logic [DATA_WIDTH-1:0] K_transpose [0:L*N*E-1];
     logic matmul_start, matmul_done;
+    logic div_done;
     
     // Transpose K matrix (L,N,E) -> (E,N,L)
     always_comb begin
@@ -72,6 +80,22 @@ module attention_score #(
         .done(matmul_done)
     );
     
+    // Division logic - multiply by 1/sqrt(E) using fixed-point multiplication
+    always_ff @(posedge clk) begin
+        if (state == MATMUL && matmul_done) begin
+            for (int i = 0; i < L*N*L; i++) begin
+                // Multiply by 1/sqrt(E) in Q15 format
+                // matmul_out is Q30, INV_SQRT_E_Q15 is Q15
+                // Result: Q30 * Q15 = Q45, then shift right by 15 to get Q30
+                logic signed [47:0] temp_mult = $signed(matmul_out[i]) * $signed(INV_SQRT_E_Q15);
+                divided_out[i] <= temp_mult[46:15];  // Extract Q30 result
+            end
+            div_done <= 1'b1;
+        end else if (state == IDLE) begin
+            div_done <= 1'b0;
+        end
+    end
+    
     // State machine
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -97,6 +121,11 @@ module attention_score #(
             end
             MATMUL: begin
                 if (matmul_done) begin
+                    next_state = DIVIDE;
+                end
+            end
+            DIVIDE: begin
+                if (div_done) begin
                     next_state = DONE;
                 end
             end
@@ -111,15 +140,15 @@ module attention_score #(
         endcase
     end
     
-    // Output assignment (truncate to DATA_WIDTH)
+    // Output assignment (truncate to DATA_WIDTH after division)
     always_ff @(posedge clk) begin
-        if (state == MATMUL && matmul_done) begin
+        if (state == DIVIDE && div_done) begin
             for (int i = 0; i < L*N*L; i++) begin
-                logic sign_bit = matmul_out[i][31];
-                logic int_bit = matmul_out[i][30];
+                logic sign_bit = divided_out[i][31];
+                logic int_bit = divided_out[i][30];
                 if (sign_bit == int_bit) begin
                     // In range: take sign bit and top 15 fractional bits
-                    A_out[i] <= {sign_bit, matmul_out[i][29:15]};
+                    A_out[i] <= {sign_bit, divided_out[i][29:15]};
                 end else begin
                     // Out of range: saturate based on sign
                     A_out[i] <= sign_bit ? 16'h8000 : 16'h7FFF;
