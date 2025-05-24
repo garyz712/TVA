@@ -7,7 +7,7 @@
 // It sums values across the batch (N) and input sequence (L) dimensions for
 // each token, then determines a precision level based on thresholding the sum.
 //
-// The output is an array of 4-bit precision codes, one per token.
+// The output is an array of 2-bit precision codes, one per token.
 // The operation is driven by a start signal and signals completion via a done output.
 // An internal FSM manages the steps: summing elements, thresholding sums, and updating outputs.
 //
@@ -31,8 +31,8 @@ module precision_assigner #(
     // Typically: A[l, n, l2].
     input  logic [DATA_WIDTH*L*N*L-1:0]       A_in,
 
-    // Output: 4-bit precision code per token (l2), total L codes
-    output logic [3:0]                        token_precision [0:L-1]
+    // Output: 2-bit precision code per token (l2), total L codes
+    output logic [1:0]                        token_precision [0:L-1]
 );
 
     // ---------------------------------------------------------------
@@ -42,11 +42,10 @@ module precision_assigner #(
     localparam int TOT_COLS  = L;      // # of tokens (the last dimension, l2)
     // So the total elements in A_in is TOT_ROWS * TOT_COLS = L*N*L
 
-    // We'll keep a local array to store the 4-bit code for each l2
-    logic [3:0] token_prec_array [0:TOT_COLS-1];
+    // We'll keep a local array to store the 2-bit code for each l2
+    logic [1:0] token_prec_array [0:TOT_COLS-1];
 
-    // If you prefer to flatten the final codes, you could do that in an always_comb,
-    // but here we just directly output an array of 4-bit codes.
+    // here we just directly output an array of 2-bit codes.
 
     // ---------------------------------------------------------------
     // 2) FSM states
@@ -182,11 +181,11 @@ module precision_assigner #(
                 S_DECIDE: begin
                     // threshold logic => token_prec_array[col_l2]
                     if(sum_temp < 100)
-                        token_prec_array[col_l2] <= 4'd0; // e.g. int4
+                        token_prec_array[col_l2] <= 2'd0; // e.g. int4
                     else if(sum_temp < 200)
-                        token_prec_array[col_l2] <= 4'd1; // e.g. int8
+                        token_prec_array[col_l2] <= 2'd1; // e.g. int8
                     else
-                        token_prec_array[col_l2] <= 4'd2; // e.g. fp16
+                        token_prec_array[col_l2] <= 2'd2; // e.g. fp16
                 end
 
                 S_CHECK_DONE: begin
