@@ -1,307 +1,311 @@
+//------------------------------------------------------------------------------
+// self_attention.sv
+//
+// Top-level module for self-attention mechanism with token-wise mixed precision.
+// Integrates qkv_generator, attention_score, precision_assigner, softmax_approx,
+// attention_av_multiply, and matmul_array for output projection with W_O.
+// Assumes a single attention head (N=1) and uses matmul_array for all matrix
+// multiplications.
+//
+// May 24 2025    Generated       Initial version
+//------------------------------------------------------------------------------
+
 module self_attention #(
-    parameter int DATA_WIDTH = 16,
-    parameter int SEQ_LEN    = 8,   // number of tokens
-    parameter int EMB_DIM    = 8    // embedding dimension
+    parameter int DATA_WIDTH = 16,  // Data width (Q1.15 for FP16)
+    parameter int L = 8,           // Sequence length
+    parameter int E = 8,           // Embedding dimension
+    parameter int N = 1            // Number of attention heads (fixed to 1)
 )(
-    input  logic                                      clk,
-    input  logic                                      rst_n,
+    input  logic                           clk,
+    input  logic                           rst_n,
+    input  logic                           start,
+    output logic                           done,
+    output logic                           out_valid,
 
-    // Control
-    input  logic                                      start,
-    output logic                                      done,
+    // Input: shape (L, E), flattened
+    input  logic [DATA_WIDTH-1:0]          x_in [L*E],
 
-    // Input: x_in, shape (SEQ_LEN, EMB_DIM), flattened
-    input  logic [DATA_WIDTH*SEQ_LEN*EMB_DIM -1:0]    x_in,
+    // Weight matrices: WQ, WK, WV, WO, each shape (E, E), flattened
+    input  logic [DATA_WIDTH-1:0]          WQ_in [E*E],
+    input  logic [DATA_WIDTH-1:0]          WK_in [E*E],
+    input  logic [DATA_WIDTH-1:0]          WV_in [E*E],
+    input  logic [DATA_WIDTH-1:0]          WO_in [E*E],
 
-    // Q, K, V weights => each is (EMB_DIM x EMB_DIM), plus bias => (EMB_DIM)
-    input  logic [DATA_WIDTH*EMB_DIM*EMB_DIM -1:0]    WQ_in,
-    input  logic [DATA_WIDTH*EMB_DIM -1:0]            bQ_in,
-    input  logic [DATA_WIDTH*EMB_DIM*EMB_DIM -1:0]    WK_in,
-    input  logic [DATA_WIDTH*EMB_DIM -1:0]            bK_in,
-    input  logic [DATA_WIDTH*EMB_DIM*EMB_DIM -1:0]    WV_in,
-    input  logic [DATA_WIDTH*EMB_DIM -1:0]            bV_in,
-
-    // Output: final attention result, shape (SEQ_LEN, EMB_DIM)
-    output logic [DATA_WIDTH*SEQ_LEN*EMB_DIM -1:0]    attn_out,
-    output logic                                      out_valid
+    // Output: shape (L, E), flattened
+    output logic [DATA_WIDTH-1:0]          out [L*E]
 );
 
-    //***************************************************************
-    // 1) States of the top-level FSM
-    //***************************************************************
-    typedef enum logic [2:0] {
+    // Local parameters
+    localparam int TOTAL_TOKENS = L * N;  // L * 1 = L
+    localparam int OUT_DATA_WIDTH = 32;   // matmul_array output width (Q2.30)
+
+    // State machine states
+    typedef enum logic [3:0] {
         S_IDLE,
-        S_QKV,      // compute Q, K, V
-        S_QK,       // compute A = QK^T
-        S_SOFTMAX,  // apply row-wise softmax
-        S_AXV,      // compute A x V
+        S_QKV,
+        S_ATTENTION_SCORE,
+        S_PRECISION_ASSIGN,
+        S_SOFTMAX,
+        S_AV_MULTIPLY,
+        S_WO_MULTIPLY,
         S_DONE
     } state_t;
 
     state_t curr_state, next_state;
 
-    //***************************************************************
-    // 2) Internal Memories
-    //***************************************************************
-    // We'll keep x_in in x_mem[seq][dim].
-    // Then we compute Q, K, V => each [seq][dim].
-    // We compute attention matrix A => shape (SEQ_LEN, SEQ_LEN).
-    // Finally, we produce output => shape (SEQ_LEN, EMB_DIM).
+    // Internal signals and storage
+    logic [DATA_WIDTH-1:0] Q [L*E];       // Query matrix: (L, E)
+    logic [DATA_WIDTH-1:0] K [L*E];       // Key matrix: (L, E)
+    logic [DATA_WIDTH-1:0] V [L*E];       // Value matrix: (L, E)
+    logic [DATA_WIDTH-1:0] A [L*L];       // Attention scores: (L, L)
+    logic [1:0]            token_precision [L]; // Precision codes per token
+    logic [DATA_WIDTH-1:0] AV_out [L*E];  // A * V output: (L, E)
 
-    logic [DATA_WIDTH-1:0] x_mem [0:SEQ_LEN-1][0:EMB_DIM-1];
-    logic [DATA_WIDTH-1:0] Q_mem [0:SEQ_LEN-1][0:EMB_DIM-1];
-    logic [DATA_WIDTH-1:0] K_mem [0:SEQ_LEN-1][0:EMB_DIM-1];
-    logic [DATA_WIDTH-1:0] V_mem [0:SEQ_LEN-1][0:EMB_DIM-1];
+    // Control signals for submodules
+    logic qkv_start, qkv_done, qkv_out_valid;
+    logic attn_score_start, attn_score_done, attn_score_out_valid;
+    logic prec_assign_start, prec_assign_done;
+    logic softmax_start, softmax_done, softmax_out_valid;
+    logic av_multiply_start, av_multiply_done;
+    logic wo_multiply_start, wo_multiply_done;
 
-    // A => shape (SEQ_LEN, SEQ_LEN), each element is DATA_WIDTH for demonstration.
-    logic [DATA_WIDTH-1:0] A_mem [0:SEQ_LEN-1][0:SEQ_LEN-1];
+    // matmul_array signals for W_O multiplication
+    logic [DATA_WIDTH-1:0]  wo_matmul_a_in [L*E];   // Input: AV_out
+    logic [DATA_WIDTH-1:0]  wo_matmul_b_in [E*E];   // Input: W_O
+    logic [OUT_DATA_WIDTH-1:0] wo_matmul_c_out [L*E]; // Output: final result
 
-    // Final output => attn_mem[seq][dim]
-    logic [DATA_WIDTH-1:0] attn_mem [0:SEQ_LEN-1][0:EMB_DIM-1];
+    // Start pulse logic for submodules
+    logic qkv_start_pulse, attn_score_start_pulse, prec_assign_start_pulse;
+    logic softmax_start_pulse, av_multiply_start_pulse, wo_multiply_start_pulse;
 
-    // We'll store weights in 2D arrays: WQ[row][col], etc.
-    // row => EMB_DIM, col => EMB_DIM
-    logic [DATA_WIDTH-1:0] WQ [0:EMB_DIM-1][0:EMB_DIM-1];
-    logic [DATA_WIDTH-1:0] WK [0:EMB_DIM-1][0:EMB_DIM-1];
-    logic [DATA_WIDTH-1:0] WV [0:EMB_DIM-1][0:EMB_DIM-1];
+    // Instantiate qkv_generator
+    qkv_generator #(
+        .DATA_WIDTH(DATA_WIDTH),
+        .L(L),
+        .N(N),
+        .E(E)
+    ) qkv_inst (
+        .clk(clk),
+        .rst_n(rst_n),
+        .start(qkv_start),
+        .done(qkv_done),
+        .x_in(x_in),
+        .WQ_in(WQ_in),
+        .WK_in(WK_in),
+        .WV_in(WV_in),
+        .Q_out(Q),
+        .K_out(K),
+        .V_out(V),
+        .out_valid(qkv_out_valid)
+    );
 
-    // biases
-    logic [DATA_WIDTH-1:0] bQ [0:EMB_DIM-1];
-    logic [DATA_WIDTH-1:0] bK [0:EMB_DIM-1];
-    logic [DATA_WIDTH-1:0] bV [0:EMB_DIM-1];
+    // Instantiate attention_score
+    attention_score #(
+        .DATA_WIDTH(DATA_WIDTH),
+        .L(L),
+        .N(N),
+        .E(E)
+    ) attn_score_inst (
+        .clk(clk),
+        .rst_n(rst_n),
+        .start(attn_score_start),
+        .done(attn_score_done),
+        .Q_in(Q),
+        .K_in(K),
+        .A_out(A),
+        .out_valid(attn_score_out_valid)
+    );
 
-    // partial sums for dot-products, counters, etc.
-    logic [$clog2(SEQ_LEN):0]  seq_i, seq_j;
-    logic [$clog2(EMB_DIM):0]  dim_i;
-    logic [31:0]               sum_temp; // up to 32 bits for partial accumulation
+    // Instantiate precision_assigner
+    precision_assigner #(
+        .DATA_WIDTH(DATA_WIDTH),
+        .L(L),
+        .N(N)
+    ) prec_assign_inst (
+        .clk(clk),
+        .rst_n(rst_n),
+        .start(prec_assign_start),
+        .done(prec_assign_done),
+        .A_in(A),
+        .token_precision(token_precision)
+    );
 
-    // For row-wise softmax, we might store row sums in row_sum[] and do naive “divide each element by row_sum”.
-    // Real design: exponent-based or approximate. We'll do a naive approach.
+    // Instantiate softmax_approx
+    softmax_approx #(
+        .DATA_WIDTH(DATA_WIDTH),
+        .L(L),
+        .N(N),
+        .FRAC_BITS(8),
+        .LUT_ADDR_WIDTH(8)
+    ) softmax_inst (
+        .clk(clk),
+        .rst_n(rst_n),
+        .start(softmax_start),
+        .done(softmax_done),
+        .A_in(A),
+        .A_out(A),
+        .out_valid(softmax_out_valid)
+    );
 
-    // row_sums for each row => row_sums[seq_i]
-    logic [31:0] row_sums [0:SEQ_LEN-1];
+    // Instantiate attention_av_multiply
+    attention_av_multiply #(
+        .A_ROWS(L),
+        .V_COLS(E),
+        .NUM_COLS(L),
+        .TILE_SIZE(8),
+        .WIDTH_INT4(4),
+        .WIDTH_INT8(8),
+        .WIDTH_FP16(16)
+    ) av_multiply_inst (
+        .clk(clk),
+        .rst_n(rst_n),
+        .start(av_multiply_start),
+        .precision_sel(token_precision),
+        .a_mem(A),
+        .v_mem(V),
+        .done(av_multiply_done),
+        .out_mem(AV_out)
+    );
 
-    //***************************************************************
-    // 3) State Register
-    //***************************************************************
+    // Instantiate matmul_array for W_O multiplication
+    matmul_array #(
+        .M(L),
+        .K(E),
+        .N(E)
+    ) wo_matmul_inst (
+        .clk(clk),
+        .rst_n(rst_n),
+        .start(wo_multiply_start),
+        .a_in(wo_matmul_a_in),
+        .b_in(wo_matmul_b_in),
+        .c_out(wo_matmul_c_out),
+        .done(wo_multiply_done)
+    );
+
+    // Start pulse generation
     always_ff @(posedge clk or negedge rst_n) begin
-        if(!rst_n)
-            curr_state <= S_IDLE;
-        else
-            curr_state <= next_state;
+        if (!rst_n) begin
+            qkv_start_pulse <= 1'b0;
+            attn_score_start_pulse <= 1'b0;
+            prec_assign_start_pulse <= 1'b0;
+            softmax_start_pulse <= 1'b0;
+            av_multiply_start_pulse <= 1'b0;
+            wo_multiply_start_pulse <= 1'b0;
+        end else begin
+            // Assert pulses for one cycle at state transitions
+            qkv_start_pulse <= (curr_state == S_IDLE && start);
+            attn_score_start_pulse <= (curr_state == S_QKV && qkv_done);
+            prec_assign_start_pulse <= (curr_state == S_ATTENTION_SCORE && attn_score_done);
+            softmax_start_pulse <= (curr_state == S_PRECISION_ASSIGN && prec_assign_done);
+            av_multiply_start_pulse <= (curr_state == S_SOFTMAX && softmax_done);
+            wo_multiply_start_pulse <= (curr_state == S_AV_MULTIPLY && av_multiply_done);
+        end
     end
 
-    //***************************************************************
-    // 4) Next-State Logic (always_comb)
-    //***************************************************************
+    // Assign start signals
+    assign qkv_start = qkv_start_pulse;
+    assign attn_score_start = attn_score_start_pulse;
+    assign prec_assign_start = prec_assign_start_pulse;
+    assign softmax_start = softmax_start_pulse;
+    assign av_multiply_start = av_multiply_start_pulse;
+    assign wo_multiply_start = wo_multiply_start_pulse;
+
+    // State machine: Sequential logic
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            curr_state <= S_IDLE;
+        end else begin
+            curr_state <= next_state;
+        end
+    end
+
+    // State machine: Next state logic
     always_comb begin
         next_state = curr_state;
-        case(curr_state)
-            S_IDLE:    if(start) next_state = S_QKV;
+        done = 1'b0;
+        out_valid = 1'b0;
 
-            // S_QKV => compute Q, K, V
-            // once done => S_QK
-            S_QKV:     if(/* we detect QKV done */ 1'b0) next_state = S_QK;
-
-            // S_QK => compute A=QK^T
-            // once done => S_SOFTMAX
-            S_QK:      if(/* qk done */ 1'b0) next_state = S_SOFTMAX;
-
-            // S_SOFTMAX => row-wise
-            // once done => S_AXV
-            S_SOFTMAX: if(/* softmax done */ 1'b0) next_state = S_AXV;
-
-            // S_AXV => compute A x V => final attn
-            // once done => S_DONE
-            S_AXV:     if(/* done */ 1'b0) next_state = S_DONE;
-
-            S_DONE:    next_state = S_IDLE;
-
-            default:   next_state = S_IDLE;
+        case (curr_state)
+            S_IDLE: begin
+                if (start)
+                    next_state = S_QKV;
+            end
+            S_QKV: begin
+                if (qkv_done)
+                    next_state = S_ATTENTION_SCORE;
+            end
+            S_ATTENTION_SCORE: begin
+                if (attn_score_done)
+                    next_state = S_PRECISION_ASSIGN;
+            end
+            S_PRECISION_ASSIGN: begin
+                if (prec_assign_done)
+                    next_state = S_SOFTMAX;
+            end
+            S_SOFTMAX: begin
+                if (softmax_done)
+                    next_state = S_AV_MULTIPLY;
+            end
+            S_AV_MULTIPLY: begin
+                if (av_multiply_done)
+                    next_state = S_WO_MULTIPLY;
+            end
+            S_WO_MULTIPLY: begin
+                if (wo_multiply_done)
+                    next_state = S_DONE;
+            end
+            S_DONE: begin
+                done = 1'b1;
+                out_valid = 1'b1;
+                next_state = S_IDLE;
+            end
+            default: next_state = S_IDLE;
         endcase
     end
 
-    //***************************************************************
-    // 5) Unpack Weights in always_comb
-    //***************************************************************
-    integer w_r, w_c;
-    always_comb begin
-        // WQ
-        for(w_r=0; w_r<EMB_DIM; w_r++) begin
-            bQ[w_r] = bQ_in[(w_r+1)*DATA_WIDTH -1 -: DATA_WIDTH];
-            for(w_c=0; w_c<EMB_DIM; w_c++) begin
-                WQ[w_r][w_c] = WQ_in[((w_r*EMB_DIM)+w_c+1)*DATA_WIDTH -1 -: DATA_WIDTH];
-            end
-        end
-        // WK
-        for(w_r=0; w_r<EMB_DIM; w_r++) begin
-            bK[w_r] = bK_in[(w_r+1)*DATA_WIDTH -1 -: DATA_WIDTH];
-            for(w_c=0; w_c<EMB_DIM; w_c++) begin
-                WK[w_r][w_c] = WK_in[((w_r*EMB_DIM)+w_c+1)*DATA_WIDTH -1 -: DATA_WIDTH];
-            end
-        end
-        // WV
-        for(w_r=0; w_r<EMB_DIM; w_r++) begin
-            bV[w_r] = bV_in[(w_r+1)*DATA_WIDTH -1 -: DATA_WIDTH];
-            for(w_c=0; w_c<EMB_DIM; w_c++) begin
-                WV[w_r][w_c] = WV_in[((w_r*EMB_DIM)+w_c+1)*DATA_WIDTH -1 -: DATA_WIDTH];
-            end
-        end
-    end
-
-    //***************************************************************
-    // 6) The Main Datapath in always_ff
-    //***************************************************************
-    integer i, j;
+    // Data path for W_O multiplication
     always_ff @(posedge clk or negedge rst_n) begin
-        if(!rst_n) begin
-            done      <= 1'b0;
-            out_valid <= 1'b0;
-
-            // init arrays
-            for(i=0; i<SEQ_LEN; i++) begin
-                for(j=0; j<EMB_DIM; j++) begin
-                    x_mem[i][j]      <= '0;
-                    Q_mem[i][j]      <= '0;
-                    K_mem[i][j]      <= '0;
-                    V_mem[i][j]      <= '0;
-                    attn_mem[i][j]   <= '0;
-                end
-                for(j=0; j<SEQ_LEN; j++) begin
-                    A_mem[i][j] <= '0;
-                end
-                row_sums[i] <= 32'd0;
+        if (!rst_n) begin
+            for (integer i = 0; i < L*E; i++) begin
+                wo_matmul_a_in[i] <= '0;
+                out[i] <= '0;
             end
-            seq_i   <= 0;
-            seq_j   <= 0;
-            dim_i   <= 0;
-            sum_temp<= 32'd0;
-
+            for (integer i = 0; i < E*E; i++) begin
+                wo_matmul_b_in[i] <= '0;
+            end
         end else begin
-            // default each cycle
-            done      <= 1'b0;
-            out_valid <= 1'b0;
-
-            case(curr_state)
-                //---------------------------------------------------------
-                // S_IDLE: unpack x_in => x_mem
-                //---------------------------------------------------------
-                S_IDLE: begin
-                    for(i=0; i<SEQ_LEN; i++) begin
-                        for(j=0; j<EMB_DIM; j++) begin
-                            int flat_idx = (i*EMB_DIM)+j;
-                            x_mem[i][j] <= x_in[(flat_idx+1)*DATA_WIDTH -1 -: DATA_WIDTH];
-                        end
+            case (curr_state)
+                S_AV_MULTIPLY: begin
+                    if (av_multiply_done) begin
+                        // Load AV_out and W_O for matmul
+                        for (integer i = 0; i < L*E; i++)
+                            wo_matmul_a_in[i] <= AV_out[i];
+                        for (integer i = 0; i < E*E; i++)
+                            wo_matmul_b_in[i] <= WO_in[i];
                     end
-                    seq_i   <= 0;
-                    seq_j   <= 0;
-                    dim_i   <= 0;
-                    sum_temp<= 0;
                 end
-
-                //---------------------------------------------------------
-                // S_QKV: compute Q, K, V => time multiplex
-                //---------------------------------------------------------
-                // e.g. one dimension at a time, partial dot product
-                // We'll do:
-                //   Q[i][dim_i] = bQ[dim_i] + sum_{k}( x_mem[i][k]*WQ[dim_i][k] )
-                // similarly for K, V
-                S_QKV: begin
-                    // Example partial approach:
-                    static logic [DATA_WIDTH-1:0] sumQ, sumK, sumV;
-                    static logic [$clog2(EMB_DIM):0] dot_idx;
-
-                    if(seq_i == 0 && dim_i == 0 && seq_j == 0) begin
-                        sumQ <= bQ[0];
-                        sumK <= bK[0];
-                        sumV <= bV[0];
-                        dot_idx <= 0;
-                    end
-
-                    // accumulate one partial multiply for Q, K, V
-                    sumQ <= sumQ + ( x_mem[seq_i][dot_idx] * WQ[dim_i][dot_idx] );
-                    sumK <= sumK + ( x_mem[seq_i][dot_idx] * WK[dim_i][dot_idx] );
-                    sumV <= sumV + ( x_mem[seq_i][dot_idx] * WV[dim_i][dot_idx] );
-
-                    if(dot_idx < (EMB_DIM-1)) begin
-                        dot_idx <= dot_idx + 1;
-                    end else begin
-                        // store results
-                        Q_mem[seq_i][dim_i] <= sumQ[DATA_WIDTH-1:0];
-                        K_mem[seq_i][dim_i] <= sumK[DATA_WIDTH-1:0];
-                        V_mem[seq_i][dim_i] <= sumV[DATA_WIDTH-1:0];
-
-                        // next dimension or next seq
-                        dot_idx <= 0;
-                        sumQ <= bQ[dim_i+1]; // next dim’s bias
-                        sumK <= bK[dim_i+1];
-                        sumV <= bV[dim_i+1];
-
-                        if(dim_i < (EMB_DIM-1)) begin
-                            dim_i <= dim_i + 1;
-                        end else begin
-                            dim_i <= 0;
-                            if(seq_i < (SEQ_LEN-1)) begin
-                                seq_i <= seq_i + 1;
+                S_WO_MULTIPLY: begin
+                    if (wo_multiply_done) begin
+                        // Convert Q2.30 to Q1.15 with saturation
+                        for (integer i = 0; i < L*E; i++) begin
+                            logic sign_bit = wo_matmul_c_out[i][31];
+                            logic int_bit = wo_matmul_c_out[i][30];
+                            if (sign_bit == int_bit) begin
+                                // In range: take sign bit and top 15 fractional bits
+                                out[i] <= {sign_bit, wo_matmul_c_out[i][29:15]};
                             end else begin
-                                // done all QKV
-                                // you’d set a “qkv_done” or so
+                                // Out of range: saturate based on sign
+                                out[i] <= sign_bit ? 16'h8000 : 16'h7FFF;
                             end
                         end
                     end
                 end
-
-                //---------------------------------------------------------
-                // S_QK: compute A= QK^T => shape (SEQ_LEN, SEQ_LEN)
-                //---------------------------------------------------------
-                // partial dot: A[i][j] = dot(Q[i], K[j])
-                // We'll do a time-multiplex approach again
-                S_QK: begin
-                    // Similar approach: partial dot of dimension EMB_DIM
-                    // e.g. sum_temp <= sum_temp + Q_mem[i][dot_idx]*K_mem[j][dot_idx]
-                end
-
-                //---------------------------------------------------------
-                // S_SOFTMAX: naive row-wise softmax across dimension j
-                //---------------------------------------------------------
-                // We'll do: for each row i:
-                //   row_sum = sum(A[i][j]) over j
-                //   then A[i][j] = A[i][j]/row_sum   (placeholder, integer divide)
-                S_SOFTMAX: begin
-                    // time multiplex each row i. 
-                    // e.g. partial approach:
-                    // 1) accumulate row_sum
-                    // 2) divide each A[i][j] by row_sum
-                end
-
-                //---------------------------------------------------------
-                // S_AXV: compute attn_mem = A x V => shape (SEQ_LEN, EMB_DIM)
-                //---------------------------------------------------------
-                // attn_mem[i][dim] = sum_{j} A[i][j]* V_mem[j][dim]
-                S_AXV: begin
-                    // partial dot approach again. 
-                    // e.g. sum_temp <= sum_temp + (A[i][j]*V_mem[j][dim])
-                end
-
-                //---------------------------------------------------------
-                // S_DONE: flatten attn_mem => attn_out, done=1
-                //---------------------------------------------------------
                 S_DONE: begin
-                    done      <= 1'b1;
-                    out_valid <= 1'b1;
-                    // flatten
-                    for(i=0; i<SEQ_LEN; i++) begin
-                        for(j=0; j<EMB_DIM; j++) begin
-                            attn_out[ ((i*EMB_DIM)+j+1)*DATA_WIDTH -1 -: DATA_WIDTH ]
-                                <= attn_mem[i][j];
-                        end
-                    end
+                    // Outputs already assigned
                 end
-
-                default: /* no-op */;
+                default: ;
             endcase
         end
     end
 
 endmodule
-
