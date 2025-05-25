@@ -60,9 +60,9 @@ async def precision_assigner_test(dut):
         sums = np.sum(A_matrix, axis=0)  # Sum across rows for each column
         precision_codes = []
         for s in sums:
-            if s < 100:
+            if s < 16384:
                 code = 0  # int4
-            elif s < 200:
+            elif s < 32768:
                 code = 1  # int8
             else:
                 code = 2  # fp16
@@ -87,14 +87,14 @@ async def precision_assigner_test(dut):
     assert token_precision == expected, f"Test 2 failed: Got {token_precision}, Expected {expected}"
 
     # Test case 3: Values to trigger code 1 (100 <= sum < 200)
-    A_matrix = np.random.randint(100 // TOT_ROWS, 150 // TOT_ROWS, size=(TOT_ROWS, TOT_COLS), dtype=np.uint16)
+    A_matrix = np.random.randint(16384 // TOT_ROWS, 24576 // TOT_ROWS, size=(TOT_ROWS, TOT_COLS), dtype=np.uint16)
     A_flat = int(''.join(['{:016b}'.format(x) for x in A_matrix.flatten()]), 2)
     token_precision = await run_test_case(A_flat)
     expected = compute_expected_precision(A_matrix)
     assert token_precision == expected, f"Test 3 failed: Got {token_precision}, Expected {expected}"
 
     # Test case 4: Values to trigger code 2 (sum >= 200)
-    A_matrix = np.random.randint(200 // TOT_ROWS, 300 // TOT_ROWS, size=(TOT_ROWS, TOT_COLS), dtype=np.uint16)
+    A_matrix = np.random.randint(32768 // TOT_ROWS, 49152 // TOT_ROWS, size=(TOT_ROWS, TOT_COLS), dtype=np.uint16)
     A_flat = int(''.join(['{:016b}'.format(x) for x in A_matrix.flatten()]), 2)
     token_precision = await run_test_case(A_flat)
     expected = compute_expected_precision(A_matrix)
@@ -103,8 +103,8 @@ async def precision_assigner_test(dut):
     # Test case 5: Mixed values to hit all thresholds
     A_matrix = np.zeros((TOT_ROWS, TOT_COLS), dtype=np.uint16)
     A_matrix[:, 0:2] = 5  # Sum = 5 * TOT_ROWS < 100
-    A_matrix[:, 2:4] = 120 // TOT_ROWS  # Sum ~ 120
-    A_matrix[:, 4:6] = 250 // TOT_ROWS  # Sum ~ 250
+    A_matrix[:, 2:4] = 20000 // TOT_ROWS  # Sum ~ 120
+    A_matrix[:, 4:6] = 40000 // TOT_ROWS  # Sum ~ 250
     A_matrix[:, 6:8] = 10  # Sum = 10 * TOT_ROWS < 100
     A_flat = int(''.join(['{:016b}'.format(x) for x in A_matrix.flatten()]), 2)
     token_precision = await run_test_case(A_flat)

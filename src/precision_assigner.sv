@@ -180,9 +180,9 @@ module precision_assigner #(
 
                 S_DECIDE: begin
                     // threshold logic => token_prec_array[col_l2]
-                    if(sum_temp < 100)
+                    if(sum_temp <  16384) // if less than 1/2
                         token_prec_array[col_l2] <= 2'd0; // e.g. int4
-                    else if(sum_temp < 200)
+                    else if(sum_temp < 32768) // if less than 1
                         token_prec_array[col_l2] <= 2'd1; // e.g. int8
                     else
                         token_prec_array[col_l2] <= 2'd2; // e.g. fp16
