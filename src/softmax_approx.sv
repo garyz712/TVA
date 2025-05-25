@@ -138,26 +138,6 @@ module softmax_approx #(
                     end
                 end
 
-                S_EXP: begin
-                    // Increment counters for exponential calculation
-                    if (col_cnt == L-1) begin
-                        col_cnt <= '0;
-                        if (head_cnt == N-1) begin
-                            head_cnt <= '0;
-                            if (row_cnt == L-1) begin
-                                row_cnt <= '0;
-                                exp_done <= 1'b1;
-                            end else begin
-                                row_cnt <= row_cnt + 1;
-                            end
-                        end else begin
-                            head_cnt <= head_cnt + 1;
-                        end
-                    end else begin
-                        col_cnt <= col_cnt + 1;
-                    end
-                end
-
                 S_SUM: begin
                     // Initialize row sums when entering this state
                     if (!sum_done && row_cnt == 0 && head_cnt == 0 && col_cnt == 0) begin
@@ -275,23 +255,6 @@ module softmax_approx #(
         end
     end
 
-    // Exponential calculation using LUT
-    always_ff @(posedge clk) begin
-        if (state == S_EXP) begin
-            // Calculate LUT address from the ReLU output
-            // Take upper bits for LUT indexing, handle scaling appropriately
-            if (A_relu[row_cnt][head_cnt][col_cnt] >= (1 << (DATA_WIDTH - LUT_ADDR_WIDTH))) begin
-                exp_lut_addr <= (1 << LUT_ADDR_WIDTH) - 1; // Max index
-            end else begin
-                exp_lut_addr <= A_relu[row_cnt][head_cnt][col_cnt][LUT_ADDR_WIDTH-1:0];
-            end
-            
-            // Look up exponential value
-            A_exp[row_cnt][head_cnt][col_cnt] <= exp_lut[exp_lut_addr];
-        end
-    end
-
-    // Row sum calculation (sum of exponentials)
     // Row sum calculation (sum of ReLU values)
     always_ff @(posedge clk) begin
         if (state == S_SUM) begin
