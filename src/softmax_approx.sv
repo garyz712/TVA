@@ -12,6 +12,7 @@
 // 3. Normalizes each element by multiplying with the reciprocal value
 //
 // May 05 2025    Tianwei Liu    Enhanced version of softmax with LUT
+// May 25 2025    Tianwei Liu    Use ReLU activation
 //------------------------------------------------------------------------------
 
 module softmax_approx #(
@@ -35,17 +36,19 @@ module softmax_approx #(
 
     // Internal array storage
     logic [DATA_WIDTH-1:0] A_arr [L][N][L];
-    logic [DATA_WIDTH-1:0] A_out_arr [L][N][L];
+    logic [DATA_WIDTH-1:0] A_relu [L][N][L];    // After ReLU
+    logic [DATA_WIDTH-1:0] A_out_arr [L][N][L]; // Final output
 
     // State machine
     typedef enum logic [2:0] {
         S_IDLE      = 3'd0,
         S_LOAD      = 3'd1,
-        S_SUM       = 3'd2,
-        S_RECIP     = 3'd3,
-        S_NORMALIZE = 3'd4,
-        S_OUTPUT    = 3'd5,
-        S_DONE      = 3'd6
+        S_RELU      = 3'd2,
+        S_SUM       = 3'd3,
+        S_RECIP     = 3'd4,
+        S_NORMALIZE = 3'd5,
+        S_OUTPUT    = 3'd6,
+        S_DONE      = 3'd7
     } state_t;
     state_t state, next_state;
 
@@ -55,32 +58,27 @@ module softmax_approx #(
     logic [$clog2(L)-1:0] col_cnt;
     
     // Flags
-    logic load_done, sum_done, recip_done, normalize_done, output_done;
+    logic load_done, relu_done, sum_done, recip_done, normalize_done, output_done;
 
     // Temporary registers for calculation
-    logic [DATA_WIDTH+$clog2(L)-1:0] row_sum [L][N];  // Wider to accommodate the sum
+    logic [DATA_WIDTH+$clog2(L)-1:0] row_sum [L][N];  // Sum of ReLU values
     logic [DATA_WIDTH-1:0] reciprocal [L][N];
     logic [DATA_WIDTH*2-1:0] scaled_value;
     
-    // Reciprocal Lookup Table (LUT)
-    // The LUT maps an address (top bits of sum) to a reciprocal value
-    // Precomputed as 1.0/index in fixed-point format
+    // Reciprocal Lookup Table
     logic [DATA_WIDTH-1:0] recip_lut [2**LUT_ADDR_WIDTH-1:0];
     
     // LUT address calculation
-    logic [LUT_ADDR_WIDTH-1:0] lut_addr;
+    logic [LUT_ADDR_WIDTH-1:0] recip_lut_addr;
     
     // LUT initialization
-    initial begin
-        // Initialize LUT with reciprocal values
-        // Values represent 1.0/x in fixed-point format
+    initial begin        
+        // Initialize reciprocal LUT with 1/x values
         for (int i = 1; i < 2**LUT_ADDR_WIDTH; i++) begin
-            // Calculate 1.0/i as a fixed-point number with FRAC_BITS fractional bits
             real recip_float = 1.0 / real'(i);
             recip_lut[i] = int'(recip_float * (2.0 ** FRAC_BITS));
         end
-        // Handle special case for index 0 (avoid division by zero)
-        recip_lut[0] = '1;  // Maximum value
+        recip_lut[0] = (1 << (DATA_WIDTH - 1)) - 1; // Max value for division by zero case
     end
 
     // Sequential state transition
@@ -93,6 +91,7 @@ module softmax_approx #(
             head_cnt <= '0;
             col_cnt <= '0;
             load_done <= 1'b0;
+            relu_done <= 1'b0;
             sum_done <= 1'b0;
             recip_done <= 1'b0;
             normalize_done <= 1'b0;
@@ -108,6 +107,7 @@ module softmax_approx #(
                     head_cnt <= '0;
                     col_cnt <= '0;
                     load_done <= 1'b0;
+                    relu_done <= 1'b0;
                     sum_done <= 1'b0;
                     recip_done <= 1'b0;
                     normalize_done <= 1'b0;
@@ -115,16 +115,59 @@ module softmax_approx #(
                 end
 
                 S_LOAD: begin
-                    // Initialize row sums to zero
-                    for (int i = 0; i < L; i++) begin
-                        for (int j = 0; j < N; j++) begin
-                            row_sum[i][j] <= '0;
-                        end
-                    end
                     load_done <= 1'b1;
                 end
 
+                S_RELU: begin
+                    // Increment counters for ReLU calculation
+                    if (col_cnt == L-1) begin
+                        col_cnt <= '0;
+                        if (head_cnt == N-1) begin
+                            head_cnt <= '0;
+                            if (row_cnt == L-1) begin
+                                row_cnt <= '0;
+                                relu_done <= 1'b1;
+                            end else begin
+                                row_cnt <= row_cnt + 1;
+                            end
+                        end else begin
+                            head_cnt <= head_cnt + 1;
+                        end
+                    end else begin
+                        col_cnt <= col_cnt + 1;
+                    end
+                end
+
+                S_EXP: begin
+                    // Increment counters for exponential calculation
+                    if (col_cnt == L-1) begin
+                        col_cnt <= '0;
+                        if (head_cnt == N-1) begin
+                            head_cnt <= '0;
+                            if (row_cnt == L-1) begin
+                                row_cnt <= '0;
+                                exp_done <= 1'b1;
+                            end else begin
+                                row_cnt <= row_cnt + 1;
+                            end
+                        end else begin
+                            head_cnt <= head_cnt + 1;
+                        end
+                    end else begin
+                        col_cnt <= col_cnt + 1;
+                    end
+                end
+
                 S_SUM: begin
+                    // Initialize row sums when entering this state
+                    if (!sum_done && row_cnt == 0 && head_cnt == 0 && col_cnt == 0) begin
+                        for (int i = 0; i < L; i++) begin
+                            for (int j = 0; j < N; j++) begin
+                                row_sum[i][j] <= '0;
+                            end
+                        end
+                    end
+                    
                     // Increment counters for row sum calculation
                     if (col_cnt == L-1) begin
                         col_cnt <= '0;
@@ -196,7 +239,8 @@ module softmax_approx #(
         next_state = state;
         case (state)
             S_IDLE:      if (start)           next_state = S_LOAD;
-            S_LOAD:      if (load_done)       next_state = S_SUM;
+            S_LOAD:      if (load_done)       next_state = S_RELU;
+            S_RELU:      if (relu_done)       next_state = S_SUM;
             S_SUM:       if (sum_done)        next_state = S_RECIP;
             S_RECIP:     if (recip_done)      next_state = S_NORMALIZE;
             S_NORMALIZE: if (normalize_done)  next_state = S_OUTPUT;
@@ -219,32 +263,59 @@ module softmax_approx #(
         end
     end
 
-    // Row sum calculation
+    // ReLU activation: max(0, x)
+    always_ff @(posedge clk) begin
+        if (state == S_RELU) begin
+            // Check if the value is negative (MSB = 1 in signed representation)
+            if (A_arr[row_cnt][head_cnt][col_cnt][DATA_WIDTH-1] == 1'b1) begin
+                A_relu[row_cnt][head_cnt][col_cnt] <= '0; // Negative -> 0
+            end else begin
+                A_relu[row_cnt][head_cnt][col_cnt] <= A_arr[row_cnt][head_cnt][col_cnt]; // Positive -> keep
+            end
+        end
+    end
+
+    // Exponential calculation using LUT
+    always_ff @(posedge clk) begin
+        if (state == S_EXP) begin
+            // Calculate LUT address from the ReLU output
+            // Take upper bits for LUT indexing, handle scaling appropriately
+            if (A_relu[row_cnt][head_cnt][col_cnt] >= (1 << (DATA_WIDTH - LUT_ADDR_WIDTH))) begin
+                exp_lut_addr <= (1 << LUT_ADDR_WIDTH) - 1; // Max index
+            end else begin
+                exp_lut_addr <= A_relu[row_cnt][head_cnt][col_cnt][LUT_ADDR_WIDTH-1:0];
+            end
+            
+            // Look up exponential value
+            A_exp[row_cnt][head_cnt][col_cnt] <= exp_lut[exp_lut_addr];
+        end
+    end
+
+    // Row sum calculation (sum of exponentials)
+    // Row sum calculation (sum of ReLU values)
     always_ff @(posedge clk) begin
         if (state == S_SUM) begin
-            // Add current element to row sum
-            row_sum[row_cnt][head_cnt] <= row_sum[row_cnt][head_cnt] + A_arr[row_cnt][head_cnt][col_cnt];
+            // Add current ReLU value to row sum
+            row_sum[row_cnt][head_cnt] <= row_sum[row_cnt][head_cnt] + A_relu[row_cnt][head_cnt][col_cnt];
         end
     end
     
     // Reciprocal calculation using LUT
     always_ff @(posedge clk) begin
         if (state == S_RECIP) begin
-            // Calculate LUT address by taking the top bits of the row sum
-            // Scale according to the size of the LUT
-            lut_addr <= row_sum[row_cnt][head_cnt][$clog2(L)+DATA_WIDTH-1:$clog2(L)+DATA_WIDTH-LUT_ADDR_WIDTH];
+            // Calculate LUT address by taking appropriate bits of the row sum
+            // Scale the sum to fit in LUT address range
+            logic [DATA_WIDTH+$clog2(L)-1:0] sum_val;
+            sum_val = row_sum[row_cnt][head_cnt];
             
-            // Look up the reciprocal value in the LUT
-            // Add bounds checking to prevent out-of-range access
-            if (row_sum[row_cnt][head_cnt] == 0) begin
-                // Special case: avoid division by zero
-                reciprocal[row_cnt][head_cnt] <= recip_lut[0];
+            if (sum_val == 0) begin
+                reciprocal[row_cnt][head_cnt] <= recip_lut[0]; // Max reciprocal for zero sum
+            end else if (sum_val >= (1 << LUT_ADDR_WIDTH)) begin
+                recip_lut_addr <= (1 << LUT_ADDR_WIDTH) - 1; // Max index
+                reciprocal[row_cnt][head_cnt] <= recip_lut[recip_lut_addr];
             end else begin
-                // Normal case: use LUT
-                reciprocal[row_cnt][head_cnt] <= recip_lut[
-                    row_sum[row_cnt][head_cnt][$clog2(L)+DATA_WIDTH-1:$clog2(L)+DATA_WIDTH-LUT_ADDR_WIDTH] == 0 ? 
-                    1 : row_sum[row_cnt][head_cnt][$clog2(L)+DATA_WIDTH-1:$clog2(L)+DATA_WIDTH-LUT_ADDR_WIDTH]
-                ];
+                recip_lut_addr <= sum_val[LUT_ADDR_WIDTH-1:0];
+                reciprocal[row_cnt][head_cnt] <= recip_lut[recip_lut_addr];
             end
         end
     end
@@ -252,11 +323,11 @@ module softmax_approx #(
     // Normalization using reciprocal multiplication
     always_ff @(posedge clk) begin
         if (state == S_NORMALIZE) begin
-            // Multiply each element by the reciprocal
-            scaled_value <= A_arr[row_cnt][head_cnt][col_cnt] * reciprocal[row_cnt][head_cnt];
+            // Multiply each ReLU value by the reciprocal of the row sum
+            scaled_value <= A_relu[row_cnt][head_cnt][col_cnt] * reciprocal[row_cnt][head_cnt];
             
             // Scale back to correct fixed-point representation and store
-            A_out_arr[row_cnt][head_cnt][col_cnt] <= scaled_value >> FRAC_BITS;
+            A_out_arr[row_cnt][head_cnt][col_cnt] <= scaled_value[DATA_WIDTH+FRAC_BITS-1:FRAC_BITS];
         end
     end
 
