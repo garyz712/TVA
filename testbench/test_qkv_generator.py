@@ -1,3 +1,4 @@
+
 import cocotb
 from cocotb.clock import Clock
 from cocotb.triggers import RisingEdge, Timer
@@ -76,28 +77,45 @@ async def drive_inputs(dut, x, wq, wk, wv):
 # Compute expected result
 # ----------------------
 def compute_expected(x, wq, wk, wv):
-    # Convert Q1.15 inputs to floating-point
-    x_float = np.vectorize(q1_15_to_real)(x)
-    wq_float = np.vectorize(q1_15_to_real)(wq)
-    wk_float = np.vectorize(q1_15_to_real)(wk)
-    wv_float = np.vectorize(q1_15_to_real)(wv)
-    
+    # Reshape inputs to appropriate dimensions
+    x_np = x.reshape(L * N, E)
+    wq_np = wq.reshape(E, E)
+    wk_np = wk.reshape(E, E)
+    wv_np = wv.reshape(E, E)
+
+    # Helper function for matrix multiplication (from test_matmul_array.py)
+    def matmul_expected(a, b):
+        expected_out = np.zeros((L * N, E), dtype=float)
+        for k in range(E):
+            for i in range(L * N):
+                raw_a = int(a[i, k])
+                a_val = q1_15_to_real(raw_a)
+                for j in range(E):
+                    raw_b = int(b[k, j])
+                    b_val = q1_15_to_real(raw_b)
+                    expected_out[i, j] += a_val * b_val
+            expected_out = np.clip(expected_out, -2.0, 1.999999999)
+        expected_q30 = np.vectorize(real_to_q1_30)(expected_out)
+        # Convert Q1.30 to Q1.15 with saturation (mimicking hardware truncation)
+        expected_q15 = []
+        for q30_val in expected_q30.flatten():
+            sign_bit = (q30_val >> 31) & 1
+            int_bit = (q30_val >> 30) & 1
+            if sign_bit == int_bit:
+                q15_val = (sign_bit << 15) | ((q30_val >> 15) & 0x7FFF)
+            else:
+                q15_val = 0x8000 if sign_bit else 0x7FFF
+            if q15_val & 0x8000:
+                q15_val = q15_val - 0x10000
+            expected_q15.append(q15_val)
+        return np.array(expected_q15, dtype=np.int16).reshape(L * N, E)
+
     # Compute Q = X * WQ, K = X * WK, V = X * WV
-    q_float = np.matmul(x_float, wq_float)
-    k_float = np.matmul(x_float, wk_float)
-    v_float = np.matmul(x_float, wv_float)
-    
-    # Clip to avoid overflow in Q1.15
-    q_float = np.clip(q_float, -1.0, 0.999969482421875)
-    k_float = np.clip(k_float, -1.0, 0.999969482421875)
-    v_float = np.clip(v_float, -1.0, 0.999969482421875)
-    
-    # Convert back to Q1.15
-    q_expected = np.vectorize(real_to_q1_15)(q_float)
-    k_expected = np.vectorize(real_to_q1_15)(k_float)
-    v_expected = np.vectorize(real_to_q1_15)(v_float)
-    
-    return q_expected.astype(np.int16), k_expected.astype(np.int16), v_expected.astype(np.int16)
+    q_expected = matmul_expected(x_np, wq_np)
+    k_expected = matmul_expected(x_np, wk_np)
+    v_expected = matmul_expected(x_np, wv_np)
+
+    return q_expected, k_expected, v_expected
 
 # ----------------------
 # Generate test case
@@ -189,7 +207,11 @@ async def test_qkv_generator(dut):
 
     await reset_dut(dut)
 
-    
+    # Test 1: Random matrices
+    for _ in range(100):
+        x, wq, wk, wv = generate_test_case()
+        await reset_dut(dut)
+        await run_test(dut, x, wq, wk, wv, "Random Matrices")
 
     # Test 2: Zero matrices
     x_zero = np.zeros((L * N, E), dtype=np.int16)
@@ -238,10 +260,5 @@ async def test_qkv_generator(dut):
     ], dtype=np.int16).reshape(E, E)
     await reset_dut(dut)
     await run_test(dut, x_small, wq_small, wk_small, wv_small, "Small Values")
-
-
-    # Test 1: Random matrices
-    x, wq, wk, wv = generate_test_case()
-    await run_test(dut, x, wq, wk, wv, "Random Matrices")
 
     dut._log.info("All tests completed.")
