@@ -80,12 +80,17 @@ async def wait_for_done(dut, timeout_cycles=1000):
     """Wait for done signal with timeout."""
     timeout = Timer(timeout_cycles * 10, units="ns")
     cycles_waited = 0
-    async with timeout:
-        while dut.done.value != 1:
-            await RisingEdge(dut.clk)
-            cycles_waited += 1
-            if cycles_waited > timeout_cycles:
-                raise cocotb.result.TestFailure("Test timed out waiting for done signal")
+    # Wait for either the done signal or the timeout
+    await First(RisingEdge(dut.done), timeout)
+    # Check if timeout occurred
+    if dut.done.value != 1:
+        raise cocotb.result.TestFailure("Test timed out waiting for done signal")
+    # Optionally, you can still track cycles waited
+    while dut.done.value != 1:
+        await RisingEdge(dut.clk)
+        cycles_waited += 1
+        if cycles_waited > timeout_cycles:
+            raise cocotb.result.TestFailure("Test timed out waiting for done signal")
 
 @cocotb.test()
 async def test_self_attention_random(dut):
@@ -142,7 +147,7 @@ async def test_self_attention_random(dut):
     for i in range(SEQ_LEN):
         for j in range(EMB_DIM):
             idx = i * EMB_DIM + j
-            y_np[i, j] = np.int16(y_out_val[idx].integer)
+            y_np[i, j] = np.array(y_out_val[idx].integer).astype(np.int16)
     
     # Compute reference output with ReLU-based softmax
     Q = x_np @ WQ_np  # (L, E)
@@ -248,7 +253,8 @@ async def test_self_attention_fixed(dut):
     for i in range(SEQ_LEN):
         for j in range(EMB_DIM):
             idx = i * EMB_DIM + j
-            y_np[i, j] = np.int16(y_out_val[idx].integer)
+            # In test_self_attention_random (line ~150), test_self_attention_fixed (line ~256), and test_self_attention_edge_cases (line ~364):
+            y_np[i, j] = np.array(y_out_val[idx].integer).astype(np.int16)
     
     # Compute reference output with ReLU-based softmax
     Q = x_np @ WQ_np
@@ -356,7 +362,8 @@ async def test_self_attention_edge_cases(dut):
     for i in range(SEQ_LEN):
         for j in range(EMB_DIM):
             idx = i * EMB_DIM + j
-            y_np[i, j] = np.int16(y_out_val[idx].integer)
+            # In test_self_attention_random (line ~150), test_self_attention_fixed (line ~256), and test_self_attention_edge_cases (line ~364):
+            y_np[i, j] = np.array(y_out_val[idx].integer).astype(np.int16)
     
     # Compute reference output with ReLU-based softmax
     Q = x_np @ WQ_np
