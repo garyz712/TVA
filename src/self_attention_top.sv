@@ -7,7 +7,8 @@
 // Assumes a single attention head (N=1) and uses matmul_array for all matrix
 // multiplications.
 //
-// May 24 2025    Generated       Initial version
+// May 24 2025    Max Zhang       Initial version
+// May 25 2025    Max Zhang       Fixed state transition      
 //------------------------------------------------------------------------------
 
 module self_attention_top #(
@@ -241,10 +242,10 @@ module self_attention_top #(
         end else begin
             // Assert pulses for one cycle at state transitions
             qkv_start_pulse <= (curr_state == S_IDLE && start);
-            attn_score_start_pulse <= (curr_state == S_QKV && qkv_done);
-            prec_assign_start_pulse <= (curr_state == S_ATTENTION_SCORE && attn_score_done);
-            softmax_start_pulse <= (curr_state == S_PRECISION_ASSIGN && prec_assign_done);
-            av_multiply_start_pulse <= (curr_state == S_SOFTMAX && softmax_done);
+            attn_score_start_pulse <= (curr_state == S_QKV && qkv_done);    
+            softmax_start_pulse <= (curr_state == S_ATTENTION_SCORE && attn_score_done);
+            prec_assign_start_pulse <= (curr_state == S_SOFTMAX && softmax_done); 
+            av_multiply_start_pulse <= (curr_state == S_PRECISION_ASSIGN && prec_assign_done); 
             wo_multiply_start_pulse <= (curr_state == S_AV_MULTIPLY && av_multiply_done);
         end
     end
