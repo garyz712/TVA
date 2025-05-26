@@ -23,14 +23,24 @@ def from_fixed_point(x, data_width=DATA_WIDTH):
     return x / scale
 
 def softmax_approx(x):
-    """Approximate softmax to mimic softmax_approx module (LUT-based, 8 fractional bits)."""
-    # Simplified: Apply max subtraction and approximate exp with quantization
-    x_max = np.max(x, axis=-1, keepdims=True)
-    exp_x = np.exp(np.clip(x - x_max, -10, 10))  # Prevent overflow
-    # Quantize to 8 fractional bits (mimicking LUT)
-    exp_x = np.round(exp_x * (2**8)) / (2**8)
-    sum_exp_x = np.sum(exp_x, axis=-1, keepdims=True)
-    return exp_x / np.maximum(sum_exp_x, 1e-10)  # Avoid division by zero
+    """Approximate softmax using ReLU and normalization, mimicking softmax_approx module."""
+    # Apply ReLU: max(0, x)
+    relu_x = np.maximum(x, 0)
+    
+    # Compute row sums
+    row_sums = np.sum(relu_x, axis=-1, keepdims=True)
+    
+    # Normalize: divide by row sum, output 0 if row sum is 0
+    with np.errstate(divide='ignore', invalid='ignore'):
+        result = np.where(row_sums != 0, relu_x / row_sums, 0)
+    
+    # Quantize to Q1.15: scale, round, and saturate
+    scale = 2 ** (DATA_WIDTH - 1)  # 2^15
+    result = np.clip(result, -1.0, 1.0 - 1/scale)
+    result_fp = np.round(result * scale).astype(np.int16)
+    
+    # Convert back to float for reference computation
+    return result_fp / scale
 
 def quantize_value(v, precision):
     """Quantize value based on precision (INT4, INT8, FP16)."""
@@ -45,11 +55,9 @@ def quantize_value(v, precision):
 
 def compute_precision(A):
     """Mimic precision_assigner: Assign INT4, INT8, or FP16 based on attention sum."""
-    # Sum attention scores per token (row sum of A)
-    token_sums = np.sum(np.abs(A), axis=-1)
-    # Thresholds based on typical precision_assigner logic (adjust as needed)
+    token_sums = np.sum(np.abs(A), axis=-1)  # Row sum
     threshold_int4 = 0.5
-    threshold_int8 = 1.5
+    threshold_int8 = 1.0
     precisions = np.zeros(SEQ_LEN, dtype=np.int32)
     for i in range(SEQ_LEN):
         if token_sums[i] < threshold_int4:
@@ -71,10 +79,13 @@ async def reset_dut(dut):
 async def wait_for_done(dut, timeout_cycles=1000):
     """Wait for done signal with timeout."""
     timeout = Timer(timeout_cycles * 10, units="ns")
-    done_event = RisingEdge(dut.clk)
-    result = await First(done_event.until(dut.done.value == 1), timeout)
-    if result == timeout:
-        raise cocotb.result.TestFailure("Test timed out waiting for done signal")
+    cycles_waited = 0
+    async with timeout:
+        while dut.done.value != 1:
+            await RisingEdge(dut.clk)
+            cycles_waited += 1
+            if cycles_waited > timeout_cycles:
+                raise cocotb.result.TestFailure("Test timed out waiting for done signal")
 
 @cocotb.test()
 async def test_self_attention_random(dut):
@@ -133,12 +144,12 @@ async def test_self_attention_random(dut):
             idx = i * EMB_DIM + j
             y_np[i, j] = np.int16(y_out_val[idx].integer)
     
-    # Compute reference output with mixed-precision approximation
+    # Compute reference output with ReLU-based softmax
     Q = x_np @ WQ_np  # (L, E)
     K = x_np @ WK_np  # (L, E)
     V = x_np @ WV_np  # (L, E)
     A = Q @ K.T / np.sqrt(EMB_DIM)  # (L, L)
-    A = softmax_approx(A)  # Approximate softmax
+    A = softmax_approx(A)  # ReLU-based normalization
     precisions = compute_precision(A)  # Assign precisions
     AV = np.zeros((SEQ_LEN, EMB_DIM), dtype=np.float32)
     for i in range(SEQ_LEN):
@@ -168,7 +179,7 @@ async def test_self_attention_random(dut):
     dut.start.value = 1
     await RisingEdge(dut.clk)
     dut.start.value = 0
-    await Timer(50, units="ns")  # Wait a few cycles
+    await Timer(50, units="ns")
     await reset_dut(dut)
     assert dut.out_valid.value == 0, "out_valid not cleared after reset"
     assert dut.done.value == 0, "done not cleared after reset"
@@ -239,7 +250,7 @@ async def test_self_attention_fixed(dut):
             idx = i * EMB_DIM + j
             y_np[i, j] = np.int16(y_out_val[idx].integer)
     
-    # Compute reference output with mixed-precision approximation
+    # Compute reference output with ReLU-based softmax
     Q = x_np @ WQ_np
     K = x_np @ WK_np
     V = x_np @ WV_np
@@ -347,7 +358,7 @@ async def test_self_attention_edge_cases(dut):
             idx = i * EMB_DIM + j
             y_np[i, j] = np.int16(y_out_val[idx].integer)
     
-    # Compute reference output with mixed-precision
+    # Compute reference output with ReLU-based softmax
     Q = x_np @ WQ_np
     K = x_np @ WK_np
     V = x_np @ WV_np
@@ -436,7 +447,7 @@ async def test_self_attention_edge_cases(dut):
     K = x_np @ WK_np
     V = x_np @ WV_np
     A = Q @ K.T / np.sqrt(EMB_DIM)
-    A = softmax_approx(A)  # Should be ~1/SEQ_LEN for all elements
+    A = softmax_approx(A)
     precisions = compute_precision(A)
     AV = np.zeros((SEQ_LEN, EMB_DIM), dtype=np.float32)
     for i in range(SEQ_LEN):
@@ -453,6 +464,54 @@ async def test_self_attention_edge_cases(dut):
     print(f"y_np (DUT output):\n{y_np}")
     print(f"y_ref_fp (Expected):\n{y_ref_fp}")
     
+    assert np.allclose(y_np, y_ref_fp, atol=4), f"Output mismatch!\nExpected:\n{y_ref_fp}\nGot:\n{y_np}"
+    assert dut.out_valid.value == 1, "out_valid not set"
+    assert dut.done.value == 1, "done not set"
+
+    # Edge case 4: Asymmetric attention to test ReLU behavior
+    x_np = np.zeros((SEQ_LEN, EMB_DIM), dtype=np.float32)
+    x_np[0, :] = 0.5  # Token 0 is dominant
+    x_fp = to_fixed_point(x_np)
+    dut.x_in.value = x_fp.flatten().tolist()
+    dut.WQ_in.value = WQ_fp.flatten().tolist()
+    dut.WK_in.value = WK_fp.flatten().tolist()
+    dut.WV_in.value = WV_fp.flatten().tolist()
+    dut.WO_in.value = WO_fp.flatten().tolist()
+
+    dut.start.value = 1
+    await RisingEdge(dut.clk)
+    dut.start.value = 0
+    await wait_for_done(dut)
+
+    y_np = np.zeros((SEQ_LEN, EMB_DIM), dtype=np.int16)
+    y_out_val = dut.out.value
+    for i in range(SEQ_LEN):
+        for j in range(EMB_DIM):
+            idx = i * EMB_DIM + j
+            y_np[i, j] = np.int16(y_out_val[idx].integer)
+
+    Q = x_np @ WQ_np
+    K = x_np @ WK_np
+    V = x_np @ WV_np
+    A = Q @ K.T / np.sqrt(EMB_DIM)
+    A = softmax_approx(A)
+    precisions = compute_precision(A)
+    AV = np.zeros((SEQ_LEN, EMB_DIM), dtype=np.float32)
+    for i in range(SEQ_LEN):
+        for j in range(EMB_DIM):
+            for k in range(SEQ_LEN):
+                v_quant = quantize_value(V[k, j], precisions[k])
+                AV[i, j] += A[i, k] * v_quant
+    y_ref = AV @ WO_np
+    y_ref_fp = to_fixed_point(y_ref)
+
+    print(f"Edge Case 4: Asymmetric Attention")
+    print(f"x_np:\n{x_np}")
+    print(f"A:\n{A}")
+    print(f"Precisions: {precisions}")
+    print(f"y_np (DUT output):\n{y_np}")
+    print(f"y_ref_fp (Expected):\n{y_ref_fp}")
+
     assert np.allclose(y_np, y_ref_fp, atol=4), f"Output mismatch!\nExpected:\n{y_ref_fp}\nGot:\n{y_np}"
     assert dut.out_valid.value == 1, "out_valid not set"
     assert dut.done.value == 1, "done not set"
