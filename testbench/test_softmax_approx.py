@@ -1,304 +1,171 @@
 import cocotb
 from cocotb.clock import Clock
-from cocotb.triggers import RisingEdge, FallingEdge, Timer
+from cocotb.triggers import RisingEdge, Timer
 import numpy as np
-import random
 
-# Parameters matching the SystemVerilog module
-DATA_WIDTH = 16
-L = 8  # Sequence length
-N = 1  # Number of attention heads
+# Helper function to convert float to Q15
+def float_to_q15(value):
+    # Q15: 1 sign bit, 15 fractional bits
+    # Clamp to [-1, 1) range for Q15
+    if value >= 1.0:
+        value = 1.0 - 1/32768
+    elif value < -1.0:
+        value = -1.0
+    # Convert to Q15
+    q15_value = int(round(value * 2**15))
+    # Ensure 16-bit signed representation
+    return q15_value & 0xFFFF
 
-def q15_to_float(val, width=16):
-    """Convert Q15 fixed-point to float"""
-    if val >= 2**(width-1):
-        val = val - 2**width
-    return val / (2**15)
+# Helper function to convert Q15 to float
+def q15_to_float(value):
+    # Handle sign extension for 16-bit value
+    if value & 0x8000:
+        value = value - 0x10000
+    return value / 2**15
 
-def float_to_q15(val, width=16):
-    """Convert float to Q15 fixed-point"""
-    # Clamp to Q15 range [-1.0, 0.99997]
-    val = max(-1.0, min(0.99997, val))
-    q15_val = int(val * (2**15))
-    if q15_val < 0:
-        q15_val = q15_val + 2**width
-    return q15_val & ((1 << width) - 1)
-
-def display_matrix_q15(matrix_flat, shape, name):
-    """Display flattened matrix as Q15 values in matrix format"""
-    matrix = np.array([q15_to_float(val) for val in matrix_flat])
-    if len(shape) == 3:
-        matrix = matrix.reshape(shape)
-        print(f"\n{name} (Q15 as float):")
-        for i in range(shape[0]):
-            for j in range(shape[1]):
-                print(f"  Head {j}, Row {i}: {matrix[i,j,:]}")
-    else:
-        matrix = matrix.reshape(shape)
-        print(f"\n{name} (Q15 as float):")
-        for i in range(shape[0]):
-            print(f"  Row {i}: {matrix[i,:]}")
-
-async def reset_dut(dut):
-    """Reset the DUT"""
-    dut.rst_n.value = 0
-    dut.start.value = 0
-    await Timer(100, units="ns")
-    dut.rst_n.value = 1
-    await Timer(50, units="ns")
-
-@cocotb.test()
-async def test_simple_softmax(dut):
-    """Test with simple known values"""
+# Reference softmax approximation in Python
+def reference_softmax_approx(input_data, L, N):
+    # Reshape input to (L, N, L)
+    data = np.array(input_data).reshape(L, N, L)
+    output = np.zeros((L, N, L), dtype=float)
     
-    # Start clock
-    clock = Clock(dut.clk, 10, units="ns")
-    cocotb.start_soon(clock.start())
-    
-    # Reset
-    await reset_dut(dut)
-    
-    print("=" * 60)
-    print("TEST: Simple Softmax with Known Values")
-    print("=" * 60)
-    
-    # Create simple test input - identity-like pattern
-    test_input = []
-    for i in range(L):
-        for j in range(N):
-            for k in range(L):
-                if i == k:
-                    # Diagonal elements: positive value (0.5 in Q15)
-                    test_input.append(float_to_q15(0.5))
-                else:
-                    # Off-diagonal: smaller positive value (0.1 in Q15)
-                    test_input.append(float_to_q15(0.1))
-    
-    # Apply inputs
-    for i in range(L * N * L):
-        dut.A_in[i].value = test_input[i]
-    
-    # Display input
-    display_matrix_q15(test_input, (L, N, L), "Input Matrix A_in")
-    
-    # Start computation
-    dut.start.value = 1
-    await RisingEdge(dut.clk)
-    dut.start.value = 0
-    
-    # Wait for completion
-    while not dut.done.value:
-        await RisingEdge(dut.clk)
-    
-    # Read outputs
-    output = []
-    for i in range(L * N * L):
-        output.append(int(dut.A_out[i].value))
-    
-    # Display output
-    display_matrix_q15(output, (L, N, L), "Output Matrix A_out")
-    
-    # Verify properties of softmax approximation
-    output_float = [q15_to_float(val) for val in output]
-    output_matrix = np.array(output_float).reshape(L, N, L)
-    
-    print("\nVerification:")
-    for i in range(L):
-        for j in range(N):
-            row_sum = np.sum(output_matrix[i, j, :])
-            print(f"  Row {i}, Head {j} sum: {row_sum:.6f}")
-            
-            # Check if all values are non-negative (ReLU property)
-            non_negative = np.all(output_matrix[i, j, :] >= 0)
-            print(f"  Row {i}, Head {j} all non-negative: {non_negative}")
-    
-    print(f"\nTest completed. out_valid = {dut.out_valid.value}")
-
-@cocotb.test()
-async def test_random_values(dut):
-    """Test with random values including negative numbers"""
-    
-    # Start clock
-    clock = Clock(dut.clk, 10, units="ns")
-    cocotb.start_soon(clock.start())
-    
-    # Reset
-    await reset_dut(dut)
-    
-    print("\n" + "=" * 60)
-    print("TEST: Random Values (including negatives)")
-    print("=" * 60)
-    
-    # Create random test input
-    random.seed(42)  # For reproducibility
-    test_input = []
-    for i in range(L * N * L):
-        # Random values between -0.8 and 0.8
-        val = random.uniform(-0.8, 0.8)
-        test_input.append(float_to_q15(val))
-    
-    # Apply inputs
-    for i in range(L * N * L):
-        dut.A_in[i].value = test_input[i]
-    
-    # Display input
-    display_matrix_q15(test_input, (L, N, L), "Input Matrix A_in (Random)")
-    
-    # Start computation
-    dut.start.value = 1
-    await RisingEdge(dut.clk)
-    dut.start.value = 0
-    
-    # Wait for completion
-    timeout = 0
-    while not dut.done.value and timeout < 1000:
-        await RisingEdge(dut.clk)
-        timeout += 1
-    
-    if timeout >= 1000:
-        print("ERROR: Timeout waiting for completion!")
-        return
-    
-    # Read outputs
-    output = []
-    for i in range(L * N * L):
-        output.append(int(dut.A_out[i].value))
-    
-    # Display output
-    display_matrix_q15(output, (L, N, L), "Output Matrix A_out (Random)")
-    
-    # Verify ReLU and normalization properties
-    output_float = [q15_to_float(val) for val in output]
-    output_matrix = np.array(output_float).reshape(L, N, L)
-    
-    print("\nVerification (Random Test):")
-    for i in range(L):
-        for j in range(N):
-            row = output_matrix[i, j, :]
-            row_sum = np.sum(row)
-            row_max = np.max(row)
-            row_min = np.min(row)
-            
-            print(f"  Row {i}, Head {j}:")
-            print(f"    Sum: {row_sum:.6f}")
-            print(f"    Max: {row_max:.6f}, Min: {row_min:.6f}")
-            print(f"    All non-negative: {np.all(row >= -1e-6)}")  # Small tolerance for numerical errors
-
-@cocotb.test()
-async def test_edge_cases(dut):
-    """Test edge cases: all zeros, all negatives, mixed"""
-    
-    # Start clock
-    clock = Clock(dut.clk, 10, units="ns")
-    cocotb.start_soon(clock.start())
-    
-    test_cases = [
-        ("All Zeros", [0.0] * (L * N * L)),
-        ("All Negatives", [-0.5] * (L * N * L)),
-        ("Mixed with Zero Row", [0.3 if i < L else (-0.2 if i < 2*L else 0.1) for i in range(L * N * L)])
-    ]
-    
-    for case_name, test_values in test_cases:
-        print("\n" + "=" * 60)
-        print(f"TEST: {case_name}")
-        print("=" * 60)
-        
-        # Reset
-        await reset_dut(dut)
-        
-        # Convert to Q15
-        test_input = [float_to_q15(val) for val in test_values]
-        
-        # Apply inputs
-        for i in range(L * N * L):
-            dut.A_in[i].value = test_input[i]
-        
-        # Display input
-        display_matrix_q15(test_input, (L, N, L), f"Input Matrix A_in ({case_name})")
-        
-        # Start computation
-        dut.start.value = 1
-        await RisingEdge(dut.clk)
-        dut.start.value = 0
-        
-        # Wait for completion
-        timeout = 0
-        while not dut.done.value and timeout < 1000:
-            await RisingEdge(dut.clk)
-            timeout += 1
-        
-        if timeout >= 1000:
-            print(f"ERROR: Timeout in {case_name} test!")
-            continue
-        
-        # Read outputs
-        output = []
-        for i in range(L * N * L):
-            output.append(int(dut.A_out[i].value))
-        
-        # Display output
-        display_matrix_q15(output, (L, N, L), f"Output Matrix A_out ({case_name})")
-        
-        # Basic verification
-        output_float = [q15_to_float(val) for val in output]
-        output_matrix = np.array(output_float).reshape(L, N, L)
-        
-        print(f"\nVerification ({case_name}):")
+    for n in range(N):
         for i in range(L):
-            for j in range(N):
-                row_sum = np.sum(output_matrix[i, j, :])
-                all_non_neg = np.all(output_matrix[i, j, :] >= -1e-6)
-                print(f"  Row {i}, Head {j}: Sum={row_sum:.6f}, Non-negative={all_non_neg}")
+            # Apply ReLU
+            relu_row = np.maximum(data[i, n, :], 0)
+            # Compute sum of row
+            row_sum = np.sum(relu_row)
+            # Normalize
+            if row_sum != 0:
+                # Approximate normalization as in HDL: scale by 2^15 and divide
+                output[i, n, :] = (relu_row) / row_sum
+            else:
+                output[i, n, :] = 0
+    
+    # Convert output to Q15
+    output_q15 = [float_to_q15(x) for x in output.flatten()]
+    return output_q15
 
 @cocotb.test()
-async def test_timing_behavior(dut):
-    """Test the timing and state machine behavior"""
+async def test_softmax_approx(dut):
+    # Parameters
+    DATA_WIDTH = 16
+    L = 8
+    N = 1
+    ARRAY_SIZE = L * N * L
     
-    print("\n" + "=" * 60)
-    print("TEST: Timing and State Machine Behavior")
-    print("=" * 60)
-    
-    # Start clock
+    # Start clock (10ns period)
     clock = Clock(dut.clk, 10, units="ns")
     cocotb.start_soon(clock.start())
     
-    # Reset
-    await reset_dut(dut)
+    # Reset the DUT
+    dut.rst_n.value = 0
+    await Timer(20, units="ns")
+    dut.rst_n.value = 1
+    await RisingEdge(dut.clk)
     
-    # Simple test input
-    test_input = [float_to_q15(0.25)] * (L * N * L)
+    # Test case 1: Random inputs in [-0.5, 0.5)
+    np.random.seed(42)
+    input_floats = np.random.uniform(-0.5, 0.5, ARRAY_SIZE)
+    input_q15 = [float_to_q15(x) for x in input_floats]
     
-    # Apply inputs
-    for i in range(L * N * L):
-        dut.A_in[i].value = test_input[i]
+    # Drive inputs
+    dut.start.value = 0
+    for i in range(ARRAY_SIZE):
+        dut.A_in[i].value = input_q15[i]
+    await RisingEdge(dut.clk)
     
-    print("Monitoring state machine transitions...")
-    
-    # Start computation and monitor signals
+    # Start the computation
     dut.start.value = 1
-    start_cycle = 0
-    cycle_count = 0
-    
     await RisingEdge(dut.clk)
     dut.start.value = 0
-    start_cycle = cycle_count
     
-    # Monitor until completion
-    while not dut.done.value:
-        cycle_count += 1
+    # Wait for done signal
+    timeout_cycles = 1000
+    for _ in range(timeout_cycles):
         await RisingEdge(dut.clk)
-        
-        if cycle_count % 50 == 0:  # Print every 50 cycles
-            print(f"  Cycle {cycle_count}: done={dut.done.value}, out_valid={dut.out_valid.value}")
+        if dut.done.value == 1:
+            break
+    else:
+        raise Exception("Timeout waiting for done signal")
     
-    total_cycles = cycle_count - start_cycle
-    print(f"\nTiming Results:")
-    print(f"  Total computation cycles: {total_cycles}")
-    print(f"  Final done: {dut.done.value}")
-    print(f"  Final out_valid: {dut.out_valid.value}")
+    # Check output valid
+    assert dut.out_valid.value == 1, "Output valid signal not asserted"
     
-    # Verify done and out_valid are both high
-    assert dut.done.value == 1, "done signal should be high"
-    assert dut.out_valid.value == 1, "out_valid signal should be high"
+    # Read outputs
+    output_q15 = [int(dut.A_out[i].value) for i in range(ARRAY_SIZE)]
+    output_floats = [q15_to_float(x) for x in output_q15]
     
-    print("Timing test completed successfully!")
+    # Compute reference output
+    ref_output_q15 = reference_softmax_approx(input_floats, L, N)
+    ref_output_floats = [q15_to_float(x) for x in ref_output_q15]
+    
+    # Compare outputs with tolerance
+    tolerance = 1/2**14  # Allow for 1/4 LSB error in Q15
+    for i in range(ARRAY_SIZE):
+        error = abs(output_floats[i] - ref_output_floats[i])
+        assert error < tolerance, f"Output mismatch at index {i}: got {output_floats[i]}, expected {ref_output_floats[i]}"
+    
+    # Test case 2: All zeros
+    input_q15 = [0] * ARRAY_SIZE
+    dut.rst_n.value = 0
+    await Timer(20, units="ns")
+    dut.rst_n.value = 1
+    await RisingEdge(dut.clk)
+    
+    for i in range(ARRAY_SIZE):
+        dut.A_in[i].value = input_q15[i]
+    await RisingEdge(dut.clk)
+    
+    dut.start.value = 1
+    await RisingEdge(dut.clk)
+    dut.start.value = 0
+    
+    for _ in range(timeout_cycles):
+        await RisingEdge(dut.clk)
+        if dut.done.value == 1:
+            break
+    else:
+        raise Exception("Timeout waiting for done signal")
+    
+    assert dut.out_valid.value == 1, "Output valid signal not asserted"
+    
+    output_q15 = [int(dut.A_out[i].value) for i in range(ARRAY_SIZE)]
+    for i in range(ARRAY_SIZE):
+        assert output_q15[i] == 0, f"Expected zero output for zero input at index {i}, got {output_q15[i]}"
+    
+    # Test case 3: Mixed positive and negative inputs
+    input_floats = np.array([0.2, -0.3, 0.4, -0.1, 0.25, -0.2, 0.15, -0.4] * (L * N))
+    input_q15 = [float_to_q15(x) for x in input_floats]
+    
+    dut.rst_n.value = 0
+    await Timer(20, units="ns")
+    dut.rst_n.value = 1
+    await RisingEdge(dut.clk)
+    
+    for i in range(ARRAY_SIZE):
+        dut.A_in[i].value = input_q15[i]
+    await RisingEdge(dut.clk)
+    
+    dut.start.value = 1
+    await RisingEdge(dut.clk)
+    dut.start.value = 0
+    
+    for _ in range(timeout_cycles):
+        await RisingEdge(dut.clk)
+        if dut.done.value == 1:
+            break
+    else:
+        raise Exception("Timeout waiting for done signal")
+    
+    assert dut.out_valid.value == 1, "Output valid signal not asserted"
+    
+    output_q15 = [int(dut.A_out[i].value) for i in range(ARRAY_SIZE)]
+    output_floats = [q15_to_float(x) for x in output_q15]
+    
+    ref_output_q15 = reference_softmax_approx(input_floats, L, N)
+    ref_output_floats = [q15_to_float(x) for x in ref_output_q15]
+    
+    for i in range(ARRAY_SIZE):
+        error = abs(output_floats[i] - ref_output_floats[i])
+        assert error < tolerance, f"Output mismatch at index {i}: got {output_floats[i]}, expected {ref_output_floats[i]}"

@@ -9,6 +9,7 @@
 // May 05 2025    Tianwei Liu    Enhanced version of softmax with LUT
 // May 25 2025    Tianwei Liu    Use ReLU activation
 // May 25 2025    Tianwei Liu    Use divide for now
+// May 25 2025    Tianwei Liu    Fix Q15 logic
 //------------------------------------------------------------------------------
 
 module softmax_approx #(
@@ -168,9 +169,12 @@ module softmax_approx #(
                 end else begin
                     // Simplified normalization: (relu_data * 2^(DATA_WIDTH-4)) / row_sum
                     // This maintains some precision while avoiding complex division
-                    logic [DATA_WIDTH+4-1:0] scaled_numerator;
-                    scaled_numerator = relu_data[norm_counter] << 4; // Scale by 16
-                    A_out[norm_counter] <= scaled_numerator / row_sums[current_row];
+                    logic [DATA_WIDTH+16-1:0] scaled_numerator;
+                    scaled_numerator = relu_data[norm_counter] << 15; // Scale by 15 to get Q15
+                    if (scaled_numerator / row_sums[current_row] >= 16'h8000)
+                        A_out[norm_counter] <= 16'h7FFF; // saturate
+                    else
+                        A_out[norm_counter] <= scaled_numerator / row_sums[current_row];
                 end
                 norm_counter <= norm_counter + 1;
             end else begin
