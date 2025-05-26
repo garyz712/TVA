@@ -10,7 +10,7 @@
 // May 24 2025    Generated       Initial version
 //------------------------------------------------------------------------------
 
-module self_attention #(
+module self_attention_top #(
     parameter int DATA_WIDTH = 16,  // Data width (Q1.15 for FP16)
     parameter int L = 8,           // Sequence length
     parameter int E = 8,           // Embedding dimension
@@ -58,6 +58,7 @@ module self_attention #(
     logic [DATA_WIDTH-1:0] K [L*E];       // Key matrix: (L, E)
     logic [DATA_WIDTH-1:0] V [L*E];       // Value matrix: (L, E)
     logic [DATA_WIDTH-1:0] A [L*L];       // Attention scores: (L, L)
+    //logic [DATA_WIDTH-1:0] A_softmax [L*L];
     logic [1:0]            token_precision [L]; // Precision codes per token
     logic [DATA_WIDTH-1:0] AV_out [L*E];  // A * V output: (L, E)
 
@@ -116,6 +117,54 @@ module self_attention #(
         .out_valid(attn_score_out_valid)
     );
 
+
+    // self_attention_top.sv
+
+    // Add this before the softmax_approx instantiation
+    logic [DATA_WIDTH-1:0] A_flat [L*N*L-1:0];
+    logic [DATA_WIDTH*L*N*L-1:0] A_packed;
+
+    // Assign A to A_flat (flatten the 2D array)
+    always_comb begin
+        for (integer i = 0; i < L; i++) begin
+            for (integer j = 0; j < L; j++) begin
+                A_flat[i*L + j] = A[i*L + j];
+            end
+        end
+    end
+
+    // Assign A to A_packed (flatten unpacked to packed)
+    always_comb begin
+        for (integer i = 0; i < L*L; i++) begin
+            A_packed[i*DATA_WIDTH +: DATA_WIDTH] = A[i];
+        end
+    end
+
+    // Modify the softmax_approx instantiation around line 129
+        softmax_approx #(
+            .DATA_WIDTH(DATA_WIDTH),
+            .L(L),
+            .N(N)
+        ) softmax_inst (
+            .clk(clk),
+            .rst_n(rst_n),
+            .start(softmax_start),
+            .done(softmax_done),
+            .A_in(A_flat),      // Use flattened array
+            .A_out(A_flat),     // Output back to flattened array
+            .out_valid(softmax_out_valid)
+        );
+
+    // Reassign A_flat back to A if needed (since A_out overwrites A)
+    always_comb begin
+        for (integer i = 0; i < L; i++) begin
+            for (integer j = 0; j < L; j++) begin
+                A[i*L + j] = A_flat[i*L + j];
+            end
+        end
+    end
+
+
     // Instantiate precision_assigner
     precision_assigner #(
         .DATA_WIDTH(DATA_WIDTH),
@@ -126,26 +175,24 @@ module self_attention #(
         .rst_n(rst_n),
         .start(prec_assign_start),
         .done(prec_assign_done),
-        .A_in(A),
+        .A_in(A_packed),
         .token_precision(token_precision)
     );
 
     // Instantiate softmax_approx
-    softmax_approx #(
-        .DATA_WIDTH(DATA_WIDTH),
-        .L(L),
-        .N(N),
-        .FRAC_BITS(8),
-        .LUT_ADDR_WIDTH(8)
-    ) softmax_inst (
-        .clk(clk),
-        .rst_n(rst_n),
-        .start(softmax_start),
-        .done(softmax_done),
-        .A_in(A),
-        .A_out(A),
-        .out_valid(softmax_out_valid)
-    );
+    // softmax_approx #(
+    //     .DATA_WIDTH(DATA_WIDTH),
+    //     .L(L),
+    //     .N(N)
+    // ) softmax_inst (
+    //     .clk(clk),
+    //     .rst_n(rst_n),
+    //     .start(softmax_start),
+    //     .done(softmax_done),
+    //     .A_in(A),
+    //     .A_out(A_softmax),
+    //     .out_valid(softmax_out_valid)
+    // );
 
     // Instantiate attention_av_multiply
     attention_av_multiply #(
