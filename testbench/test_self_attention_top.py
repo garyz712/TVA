@@ -55,9 +55,13 @@ def quantize_value(v, precision):
 
 def compute_precision(A):
     """Mimic precision_assigner: Assign INT4, INT8, or FP16 based on attention sum."""
-    token_sums = np.sum(np.abs(A), axis=-1)  # Row sum
-    threshold_int4 = 0.5
-    threshold_int8 = 1.0
+    #scale = 2 ** (DATA_WIDTH - 1)  # 32768 for Q1.15
+    #A_fp = np.round(A * scale).astype(np.int16)  # Convert to Q1.15
+    A_fp = to_fixed_point(A)
+    token_sums = np.sum(A_fp, axis=0, dtype=np.int32)  # Sum per key in fixed-point
+
+    threshold_int4 = 16384 #0.5
+    threshold_int8 = 32768 #1.0
     precisions = np.zeros(SEQ_LEN, dtype=np.int32)
     for i in range(SEQ_LEN):
         if token_sums[i] < threshold_int4:
@@ -161,7 +165,8 @@ async def test_self_attention_random(dut):
         for j in range(EMB_DIM):
             for k in range(SEQ_LEN):
                 v_quant = quantize_value(V[k, j], precisions[k])
-                AV[i, j] += A[i, k] * v_quant
+                a_quant = quantize_value(A[i, k], precisions[k])
+                AV[i, j] += a_quant * v_quant
     y_ref = AV @ WO_np  # (L, E)
     y_ref_fp = to_fixed_point(y_ref)
     
@@ -268,7 +273,8 @@ async def test_self_attention_fixed(dut):
         for j in range(EMB_DIM):
             for k in range(SEQ_LEN):
                 v_quant = quantize_value(V[k, j], precisions[k])
-                AV[i, j] += A[i, k] * v_quant
+                a_quant = quantize_value(A[i, k], precisions[k])
+                AV[i, j] += a_quant * v_quant
     y_ref = AV @ WO_np
     y_ref_fp = to_fixed_point(y_ref)
     
@@ -377,7 +383,8 @@ async def test_self_attention_edge_cases(dut):
         for j in range(EMB_DIM):
             for k in range(SEQ_LEN):
                 v_quant = quantize_value(V[k, j], precisions[k])
-                AV[i, j] += A[i, k] * v_quant
+                a_quant = quantize_value(A[i, k], precisions[k])
+                AV[i, j] += a_quant * v_quant
     y_ref = AV @ WO_np
     y_ref_fp = to_fixed_point(y_ref)
     
@@ -461,7 +468,8 @@ async def test_self_attention_edge_cases(dut):
         for j in range(EMB_DIM):
             for k in range(SEQ_LEN):
                 v_quant = quantize_value(V[k, j], precisions[k])
-                AV[i, j] += A[i, k] * v_quant
+                a_quant = quantize_value(A[i, k], precisions[k])
+                AV[i, j] += a_quant * v_quant
     y_ref = AV @ WO_np
     y_ref_fp = to_fixed_point(y_ref)
     
@@ -508,7 +516,8 @@ async def test_self_attention_edge_cases(dut):
         for j in range(EMB_DIM):
             for k in range(SEQ_LEN):
                 v_quant = quantize_value(V[k, j], precisions[k])
-                AV[i, j] += A[i, k] * v_quant
+                a_quant = quantize_value(A[i, k], precisions[k])
+                AV[i, j] += a_quant * v_quant
     y_ref = AV @ WO_np
     y_ref_fp = to_fixed_point(y_ref)
 
