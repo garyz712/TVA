@@ -283,16 +283,16 @@ module self_attention_top #(
             end
             S_ATTENTION_SCORE: begin
                 if (attn_score_done)
-                    next_state = S_PRECISION_ASSIGN;
-            end
-            S_PRECISION_ASSIGN: begin
-                if (prec_assign_done)
                     next_state = S_SOFTMAX;
             end
             S_SOFTMAX: begin
                 if (softmax_done)
-                    next_state = S_AV_MULTIPLY;
+                    next_state = S_PRECISION_ASSIGN;
             end
+            S_PRECISION_ASSIGN: begin
+                if (prec_assign_done)
+                    next_state = S_AV_MULTIPLY;
+            end           
             S_AV_MULTIPLY: begin
                 if (av_multiply_done)
                     next_state = S_WO_MULTIPLY;
@@ -356,3 +356,4 @@ module self_attention_top #(
     end
 
 endmodule
+
