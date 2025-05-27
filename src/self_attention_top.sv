@@ -124,6 +124,7 @@ module self_attention_top #(
     // Add this before the softmax_approx instantiation
     logic [DATA_WIDTH-1:0] A_flat [L*N*L-1:0];
     logic [DATA_WIDTH*L*N*L-1:0] A_packed;
+    logic [DATA_WIDTH-1:0] A_softmax [L*L];
 
     // Assign A to A_flat (flatten the 2D array)
     always_comb begin
@@ -134,33 +135,36 @@ module self_attention_top #(
         end
     end
 
-    // Assign A to A_packed (flatten unpacked to packed)
+
     always_comb begin
-        for (integer i = 0; i < L*L; i++) begin
-            A_packed[i*DATA_WIDTH +: DATA_WIDTH] = A[i];
+        for (integer i = 0; i < L; i++) begin
+            for (integer j = 0; j < L; j++) begin
+                A_packed[(i*L + j)*DATA_WIDTH +: DATA_WIDTH] = A[i*L + j];
+            end
         end
     end
 
     // Modify the softmax_approx instantiation around line 129
-        softmax_approx #(
-            .DATA_WIDTH(DATA_WIDTH),
-            .L(L),
-            .N(N)
-        ) softmax_inst (
-            .clk(clk),
-            .rst_n(rst_n),
-            .start(softmax_start),
-            .done(softmax_done),
-            .A_in(A_flat),      // Use flattened array
-            .A_out(A_flat),     // Output back to flattened array
-            .out_valid(softmax_out_valid)
-        );
+    softmax_approx #(
+        .DATA_WIDTH(DATA_WIDTH),
+        .L(L),
+        .N(N)
+    ) softmax_inst (
+        .clk(clk),
+        .rst_n(rst_n),
+        .start(softmax_start),
+        .done(softmax_done),
+        .A_in(A_flat),      // Use flattened array
+        .A_out(A_softmax),     // Output back to flattened array
+        .out_valid(softmax_out_valid)
+    );
 
-    // Reassign A_flat back to A if needed (since A_out overwrites A)
+
+    // Update A from A_softmax
     always_comb begin
         for (integer i = 0; i < L; i++) begin
             for (integer j = 0; j < L; j++) begin
-                A[i*L + j] = A_flat[i*L + j];
+                A[i*L + j] = A_softmax[i*L + j];
             end
         end
     end
@@ -179,21 +183,6 @@ module self_attention_top #(
         .A_in(A_packed),
         .token_precision(token_precision)
     );
-
-    // Instantiate softmax_approx
-    // softmax_approx #(
-    //     .DATA_WIDTH(DATA_WIDTH),
-    //     .L(L),
-    //     .N(N)
-    // ) softmax_inst (
-    //     .clk(clk),
-    //     .rst_n(rst_n),
-    //     .start(softmax_start),
-    //     .done(softmax_done),
-    //     .A_in(A),
-    //     .A_out(A_softmax),
-    //     .out_valid(softmax_out_valid)
-    // );
 
     // Instantiate attention_av_multiply
     attention_av_multiply #(
