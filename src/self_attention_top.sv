@@ -121,13 +121,9 @@ module self_attention_top #(
 
     // self_attention_top.sv
 
-    // Add this before the softmax_approx instantiation
-    // logic [DATA_WIDTH-1:0] A_flat [L*N*L-1:0];
-    // logic [DATA_WIDTH*L*N*L-1:0] A_packed;
-    // logic [DATA_WIDTH-1:0] A_softmax [L*N*L];
 
-    logic [DATA_WIDTH-1:0] A_flat [L*N*L]; // Flattened input to softmax
-    logic [DATA_WIDTH-1:0] A_softmax [L*N*L]; // Softmax output
+    logic [DATA_WIDTH-1:0] A_flat [0:L*N*L-1];
+    logic [DATA_WIDTH-1:0] A_softmax [0:L*N*L-1]; // Softmax output
     logic [DATA_WIDTH*L*N*L-1:0] A_packed; // Packed input to precision_assigner
 
     // Flatten A to A_flat for softmax input
@@ -149,19 +145,19 @@ module self_attention_top #(
     end
 
     // Modify the softmax_approx instantiation around line 129
-        softmax_approx #(
-            .DATA_WIDTH(DATA_WIDTH),
-            .L(L),
-            .N(N)
-        ) softmax_inst (
-            .clk(clk),
-            .rst_n(rst_n),
-            .start(softmax_start),
-            .done(softmax_done),
-            .A_in(A_flat),      // Use flattened array
-            .A_out(A_softmax),     // Output back to flattened array
-            .out_valid(softmax_out_valid)
-        );
+    softmax_approx #(
+        .DATA_WIDTH(DATA_WIDTH),
+        .L(L),
+        .N(N)
+    ) softmax_inst (
+        .clk(clk),
+        .rst_n(rst_n),
+        .start(softmax_start),
+        .done(softmax_done),
+        .A_in(A_flat),      // Use flattened array
+        .A_out(A_softmax),     // Output back to flattened array
+        .out_valid(softmax_out_valid)
+    );
 
 
     // Instantiate precision_assigner
