@@ -13,6 +13,8 @@ EXTRA_ARGS += --trace --trace-structs
 # VERILOG_SOURCES += $(PWD)/../src/precision_assigner.sv
 # VERILOG_SOURCES += $(PWD)/../src/softmax_approx.sv
 VERILOG_SOURCES += $(PWD)/../src/classification_head.sv
+# VERILOG_SOURCES += $(PWD)/../src/qkv_generator.sv
+# VERILOG_SOURCES += $(PWD)/../src/self_attention_top.sv
 # use VHDL_SOURCES for VHDL files
 
 # TOPLEVEL is the name of the toplevel module in your Verilog or VHDL file

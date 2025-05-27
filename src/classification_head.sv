@@ -16,10 +16,10 @@ module classification_head #(
     input  logic                                   clk,
     input  logic                                   rst_n,
     input  logic                                   start,
-    input  logic signed [DATA_WIDTH-1:0]           patch_emb_in [N*E-1:0],
-    input  logic signed [DATA_WIDTH-1:0]           W_clf_in [E*NUM_CLASSES-1:0],
-    input  logic signed [DATA_WIDTH-1:0]           b_clf_in [NUM_CLASSES-1:0],
-    output logic signed [DATA_WIDTH-1:0]           logits_out [NUM_CLASSES-1:0],
+    input  logic signed [DATA_WIDTH-1:0]           patch_emb_in [0:N*E-1],
+    input  logic signed [DATA_WIDTH-1:0]           W_clf_in [0:E*NUM_CLASSES-1],
+    input  logic signed [DATA_WIDTH-1:0]           b_clf_in [0:NUM_CLASSES-1],
+    output logic signed [DATA_WIDTH-1:0]           logits_out [0:NUM_CLASSES-1],
     output logic                                   out_valid
 );
 
@@ -59,7 +59,7 @@ module classification_head #(
     end
 
     // Stage 2: Compute logits = W^T * mean + b
-    logic signed [2*DATA_WIDTH-1:0] dot_products [NUM_CLASSES-1:0];
+    logic signed [2*DATA_WIDTH-1:0] dot_products [0:NUM_CLASSES-1];
     logic stage2_done;
 
     mult_t product;
