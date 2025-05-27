@@ -10,6 +10,7 @@
 // May 25 2025    Tianwei Liu    Use ReLU activation
 // May 25 2025    Tianwei Liu    Use divide for now
 // May 25 2025    Tianwei Liu    Fix Q15 logic
+// May 26 2025    Max Zhang    Fix Indexing
 //------------------------------------------------------------------------------
 
 module softmax_approx #(
@@ -23,9 +24,9 @@ module softmax_approx #(
     input logic start,
     output logic done,
     // Input: A_in of shape (L, N, L)
-    input logic [DATA_WIDTH-1:0] A_in [L*N*L-1:0],
+    input logic [DATA_WIDTH-1:0] A_in [0:L*N*L-1],
     // Output: A_out of shape (L, N, L)
-    output logic [DATA_WIDTH-1:0] A_out [L*N*L-1:0],
+    output logic [DATA_WIDTH-1:0] A_out [0:L*N*L-1],
     output logic out_valid
 );
 
@@ -41,8 +42,8 @@ module softmax_approx #(
     state_t current_state, next_state;
     
     // Internal registers and wires
-    logic [DATA_WIDTH-1:0] relu_data [L*N*L-1:0];
-    logic [DATA_WIDTH+$clog2(L)-1:0] row_sums [L*N-1:0]; // Extended width for sum
+    logic [DATA_WIDTH-1:0] relu_data [0:L*N*L-1];
+    logic [DATA_WIDTH+$clog2(L)-1:0] row_sums [0:L*N-1]; // Extended width for sum
     logic [$clog2(L*N*L):0] element_counter;
     logic [$clog2(L*N):0] row_counter;
     logic [$clog2(L):0] col_counter;
@@ -83,6 +84,7 @@ module softmax_approx #(
             DONE_STATE: begin
                 next_state = IDLE;
             end
+            default: next_state = IDLE;
         endcase
     end
     
