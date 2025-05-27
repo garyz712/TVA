@@ -169,7 +169,7 @@ def compute_expected(x, wq, wk, wv, wo):
                 q_val = q1_15_to_real(q_np[i, e])
                 k_val = q1_15_to_real(k_np[j, 0, e])  # N=1
                 matmul_result[i, j] += q_val * k_val
-    matmul_result = np.clip(matmul_result, -2.0, 1.999999999)
+        matmul_result = np.clip(matmul_result, -2.0, 1.999999999)
     matmul_q30 = np.vectorize(real_to_q1_30)(matmul_result)
     a_q30 = np.array([hw_multiply_inv_sqrt8(matmul_q30[i, j]) for i in range(L * N) for j in range(L)], dtype=np.int32)
 
