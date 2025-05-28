@@ -18,7 +18,7 @@ module mlp #(
     parameter int DATA_WIDTH = 16     // Q0.15 fixed-point
 ) (
     input  logic                  clk,         // Clock
-    input  logic                  rst,         // Active-high reset
+    input  logic                  rst_n,         // Active-low reset
     input  logic                  start,       // Start computation
     input  logic                  valid_in,    // Input data valid
     input  logic [DATA_WIDTH-1:0] x [HIDDEN_DIM], // Input vector
@@ -87,8 +87,8 @@ module mlp #(
     );
 
     // State transition (sequential)
-    always_ff @(posedge clk or posedge rst) begin
-        if (rst)
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n)
             state <= IDLE;
         else
             state <= next_state;

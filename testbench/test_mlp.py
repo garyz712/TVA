@@ -62,7 +62,7 @@ async def mlp_test(dut):
     cocotb.start_soon(clock.start())
 
     # Reset the DUT
-    dut.rst.value = 1
+    dut.rst_n.value = 0
     dut.start.value = 0
     dut.valid_in.value = 0
     for i in range(HIDDEN_DIM):
@@ -73,7 +73,7 @@ async def mlp_test(dut):
         dut.b[i].value = 0
     await Timer(20, units="ns")
     await RisingEdge(dut.clk)
-    dut.rst.value = 0
+    dut.rst_n.value = 1
     await RisingEdge(dut.clk)
 
     # Generate random inputs
