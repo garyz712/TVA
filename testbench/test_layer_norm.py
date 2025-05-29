@@ -12,6 +12,7 @@ DATA_WIDTH = 16
 SEQ_LEN    = 8
 EMB_DIM    = 8
 EPSILON    = 0x34000000           # ≈1e‑5 as 32‑bit integer
+H_MLP = 32
 
 # --------------------------------------------------------------------
 # Utility helpers
@@ -87,9 +88,43 @@ async def test_layer_norm_random(dut):
     start_clock(dut)
     await reset_dut(dut)
 
-    x_np     = np.random.randint(-100, 100, (SEQ_LEN, EMB_DIM), dtype=np.int32)
-    gamma_np = np.random.randint(-10,  10,  EMB_DIM, dtype=np.int32)
-    beta_np  = np.random.randint(-10,  10,  EMB_DIM, dtype=np.int32)
+    def real_to_q1_15(x):
+        val = int(x * np.int32(2**15))
+        if val > 32767:
+            val = 32767
+        if val < -32768:
+            val = -32768
+        return np.array(val).astype(np.int16)
+
+    np.random.seed(42)  # For reproducibility
+    x_in_real = np.random.uniform(-0.9, 0.9, (SEQ_LEN, EMB_DIM))
+    WQ_real = np.random.uniform(-0.9, 0.9, (EMB_DIM, EMB_DIM))
+    WK_real = np.random.uniform(-0.9, 0.9, (EMB_DIM, EMB_DIM))
+    WV_real = np.random.uniform(-0.9, 0.9, (EMB_DIM, EMB_DIM))
+    WO_real = np.random.uniform(-0.9, 0.9, (EMB_DIM, EMB_DIM))
+    W1_real = np.random.uniform(-0.9, 0.9, (EMB_DIM, H_MLP))
+    b1_real = np.random.uniform(-0.9, 0.9, H_MLP)
+    W2_real = np.random.uniform(-0.9, 0.9, (H_MLP, EMB_DIM))
+    b2_real = np.random.uniform(-0.9, 0.9, EMB_DIM)
+    ln1_gamma_real = np.random.uniform(-10*2**-15, 10*2**-15, EMB_DIM)  # Non-zero for normalization
+    ln1_beta_real = np.random.uniform(-10*2**-15, 10*2**-15, EMB_DIM)
+    ln2_gamma_real = np.random.uniform(-10*2**-15, 10*2**-15, EMB_DIM)
+    ln2_beta_real = np.random.uniform(-10*2**-15, 10*2**-15, EMB_DIM)
+
+    # Convert to Q1.15 format
+    x_np = np.array([real_to_q1_15(val) for val in x_in_real.flatten()]).reshape(SEQ_LEN, EMB_DIM)
+    WQ_q15 = np.array([real_to_q1_15(val) for val in WQ_real.flatten()]).reshape(EMB_DIM, EMB_DIM)
+    WK_q15 = np.array([real_to_q1_15(val) for val in WK_real.flatten()]).reshape(EMB_DIM, EMB_DIM)
+    WV_q15 = np.array([real_to_q1_15(val) for val in WV_real.flatten()]).reshape(EMB_DIM, EMB_DIM)
+    WO_q15 = np.array([real_to_q1_15(val) for val in WO_real.flatten()]).reshape(EMB_DIM, EMB_DIM)
+    W1_q15 = np.array([real_to_q1_15(val) for val in W1_real.flatten()]).reshape(EMB_DIM, H_MLP)
+    b1_q15 = np.array([real_to_q1_15(val) for val in b1_real])
+    W2_q15 = np.array([real_to_q1_15(val) for val in W2_real.flatten()]).reshape(H_MLP, EMB_DIM)
+    b2_q15 = np.array([real_to_q1_15(val) for val in b2_real])
+    gamma_np = np.array([real_to_q1_15(val) for val in ln1_gamma_real])
+    beta_np = np.array([real_to_q1_15(val) for val in ln1_beta_real])
+    ln2_gamma_q15 = np.array([real_to_q1_15(val) for val in ln2_gamma_real])
+    ln2_beta_q15 = np.array([real_to_q1_15(val) for val in ln2_beta_real])
 
     dut.x_in.value     = pack_lsb_first(x_np.flatten())
     dut.gamma_in.value = pack_lsb_first(gamma_np)
@@ -103,6 +138,9 @@ async def test_layer_norm_random(dut):
 
     got = unpack_row_major_reverse_rows(int(dut.x_out.value))
     exp = compute_layer_norm_reference(x_np, gamma_np, beta_np)
+
+    print(exp)
+    print(got)
 
     assert np.array_equal(got, exp), f"\nExpected:\n{exp}\nGot:\n{got}"
     assert dut.done.value and dut.out_valid.value

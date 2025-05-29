@@ -326,6 +326,7 @@ module vit_top #(
                 logits_valid = 1'b1;
             end
             default: /* no-op */
+            begin end
         endcase
     end
 

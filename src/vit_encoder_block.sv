@@ -66,7 +66,7 @@ module vit_encoder_block #(
     // MLP
     logic mlp_start, mlp_done, mlp_out_valid, mlp_valid_in;
     logic [DATA_WIDTH-1:0] mlp_in [EMB_DIM];
-    logic [DATA_WIDTH-1:0] mlp_out [H_MLP];
+    logic [DATA_WIDTH-1:0] mlp_out [EMB_DIM]; // Changed to EMB_DIM
     logic [DATA_WIDTH-1:0] mlp_out_array [SEQ_LEN*EMB_DIM];
     // Residual2
     logic res2_start, res2_done, res2_out_valid;
@@ -198,6 +198,7 @@ module vit_encoder_block #(
     mlp #(
         .HIDDEN_DIM(EMB_DIM),
         .MLP_DIM   (H_MLP),
+        .OUT_DIM   (EMB_DIM),
         .DATA_WIDTH(DATA_WIDTH)
     ) u_mlp (
         .clk      (clk),
@@ -205,8 +206,10 @@ module vit_encoder_block #(
         .start    (mlp_start),
         .valid_in (mlp_valid_in),
         .x        (mlp_in),
-        .W        (W1_in),
-        .b        (b1_in),
+        .W1       (W1_in),
+        .b1       (b1_in),
+        .W2       (W2_in),
+        .b2       (b2_in),
         .valid_out(mlp_out_valid),
         .done     (mlp_done),
         .y        (mlp_out)
@@ -214,33 +217,42 @@ module vit_encoder_block #(
 
     // MLP control: process each token in sequence
     logic [31:0] token_idx;
+    logic mlp_start_pulse;
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             token_idx <= 0;
             mlp_valid_in <= 0;
             mlp_out_array <= '{default:0};
+            mlp_start_pulse <= 0;
         end else begin
-            if (curr_state == S_MLP) begin
+            if (curr_state == S_MLP || curr_state == S_WAIT_MLP) begin
                 if (token_idx < SEQ_LEN) begin
                     mlp_valid_in <= 1;
                     // Assign current token's embedding
                     for (int i = 0; i < EMB_DIM; i++) begin
                         mlp_in[i] = ln2_out_array[token_idx*EMB_DIM + i];
                     end
+                    // Pulse mlp_start for one cycle when mlp_out_valid is received or for first token
+                    if ((token_idx == 0 && curr_state == S_MLP) || (mlp_out_valid && token_idx < SEQ_LEN)) begin
+                        mlp_start_pulse <= 1;
+                    end else begin
+                        mlp_start_pulse <= 0;
+                    end
+                    // Store MLP output and increment token_idx
                     if (mlp_out_valid) begin
-                        // Store first EMB_DIM elements of MLP output
                         for (int i = 0; i < EMB_DIM; i++) begin
                             mlp_out_array[token_idx*EMB_DIM + i] = mlp_out[i];
                         end
-                        $display("plus 1");
                         token_idx <= token_idx + 1;
                     end
                 end else begin
                     mlp_valid_in <= 0;
+                    mlp_start_pulse <= 0;
                 end
             end else begin
                 token_idx <= 0;
                 mlp_valid_in <= 0;
+                mlp_start_pulse <= 0;
             end
         end
     end
@@ -300,7 +312,6 @@ module vit_encoder_block #(
             end
             // LN1
             S_LN1: begin
-                $display("LN1");
                 next_state = S_WAIT_LN1;
             end
             S_WAIT_LN1: begin
@@ -308,7 +319,6 @@ module vit_encoder_block #(
             end
             // Self-Attention
             S_ATT: begin
-                $display("ATT");
                 next_state = S_WAIT_ATT;
             end
             S_WAIT_ATT: begin
@@ -316,7 +326,6 @@ module vit_encoder_block #(
             end
             // Residual #1
             S_RES1: begin
-                $display("RES1");
                 next_state = S_WAIT_RES1;
             end
             S_WAIT_RES1: begin
@@ -324,7 +333,6 @@ module vit_encoder_block #(
             end
             // LN2
             S_LN2: begin
-                $display("LN2");
                 next_state = S_WAIT_LN2;
             end
             S_WAIT_LN2: begin
@@ -332,22 +340,19 @@ module vit_encoder_block #(
             end
             // MLP
             S_MLP: begin
-                $display("MLP");
                 next_state = S_WAIT_MLP;
             end
             S_WAIT_MLP: begin
-                if (mlp_done && token_idx == SEQ_LEN) next_state = S_RES2;
+                if (token_idx == SEQ_LEN && mlp_done) next_state = S_RES2;
             end
             // Residual #2
             S_RES2: begin
-                $display("RES2");
                 next_state = S_WAIT_RES2;
             end
             S_WAIT_RES2: begin
                 if (res2_done)   next_state = S_DONE;
             end
             S_DONE: begin
-                $display("DONE");
                 next_state = S_IDLE;
             end
             default: begin
@@ -376,8 +381,8 @@ module vit_encoder_block #(
             S_ATT:   attn_start = 1'b1;
             S_RES1:  res1_start = 1'b1;
             S_LN2:   ln2_start  = 1'b1;
-            S_MLP:   mlp_start  = 1'b1;
-            S_WAIT_MLP:   mlp_start  = 1'b1;
+            S_MLP:   mlp_start  = mlp_start_pulse;
+            S_WAIT_MLP: mlp_start = mlp_start_pulse;
             S_RES2:  res2_start = 1'b1;
             S_DONE: begin
                 done      = 1'b1;
@@ -396,7 +401,7 @@ module vit_encoder_block #(
         if (!rst_n) begin
             for (int i = 0; i < SEQ_LEN*EMB_DIM; i++)
                 out_block[i] <= '0;
-        end else if (curr_state == S_DONE) begin
+        end else if (curr_state == S_WAIT_RES2 && res2_done) begin
             for (int i = 0; i < SEQ_LEN*EMB_DIM; i++) begin
                 out_block[i] <= res2_out[i*DATA_WIDTH +: DATA_WIDTH];
             end

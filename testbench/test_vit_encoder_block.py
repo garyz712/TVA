@@ -37,7 +37,7 @@ def hw_multiply_inv_sqrt8(x):
     # As per the reference, use a fixed value of 10 for non-zero inputs
     return 10 if x != 0 else 0
 
-def compute_layer_norm_reference(x_np, gamma_np, beta_np, seq_len, emb_dim, data_width=16, epsilon=1e-5):
+def compute_layer_norm_reference(x_np, gamma_np, beta_np, seq_len, emb_dim, data_width=16, epsilon=0x34000000):
     """Software model for LayerNorm that mirrors RTL maths (incl. fake inv-sqrt)."""
     out = np.zeros_like(x_np, dtype=np.int32)
     maxv = (1 << (data_width - 1)) - 1
@@ -46,11 +46,11 @@ def compute_layer_norm_reference(x_np, gamma_np, beta_np, seq_len, emb_dim, data
         mean = np.sum(x_np[i]) // emb_dim
         diff = x_np[i] - mean
         var = np.sum(diff * diff) // emb_dim
-        denom = var + int(epsilon * (2**30))  # Epsilon in Q1.30
+        denom = var + epsilon
         inv_std = 10 if denom != 0 else 0  # Placeholder inverse-sqrt
         for j in range(emb_dim):
             tmp = (x_np[i, j] - mean) * inv_std
-            val = (tmp * gamma_np[j] + beta_np[j]) >> 15  # Q1.15 multiplication
+            val = (tmp * gamma_np[j] + beta_np[j]) # >> 15  # Q1.15 multiplication
             out[i, j] = np.clip(val, minv, maxv)
     return out
 
@@ -92,6 +92,15 @@ def compute_attention_reference(x_np, wq_np, wk_np, wv_np, wo_np, seq_len, emb_d
     q = matmul_expected(x_np, wq_np).reshape(l, n, e)
     k = matmul_expected(x_np, wk_np).reshape(l, n, e)
     v = matmul_expected(x_np, wv_np).reshape(l, n, e)
+
+    def hw_multiply_inv_sqrt8(matmul_result_q30):
+        matmul_signed = np.array(matmul_result_q30).astype(np.int32)
+        inv_sqrt8_signed = np.int16(0x2D50)
+        mult_result = np.int64(matmul_signed) * np.int64(inv_sqrt8_signed)
+        q30_result = (mult_result >> 15) & 0xFFFFFFFF
+        if q30_result & 0x80000000:
+            q30_result = q30_result - 0x100000000
+        return np.int32(q30_result)
 
     # Step 2: Attention scores
     q_np = q.reshape(l * n, e)
@@ -195,6 +204,14 @@ def compute_attention_reference(x_np, wq_np, wk_np, wv_np, wo_np, seq_len, emb_d
             q15_val = q15_val - 0x10000
         out_q15.append(q15_val)
     out_q15 = np.array(out_q15, dtype=np.int16).reshape(l, e)
+    print({'Q': q.reshape(l, e),
+        'K': k.reshape(l, e),
+        'V': v.reshape(l, e),
+        'A': a.reshape(l, l),
+        'A_softmax': a_softmax_q15.reshape(l, l),
+        'token_precision': np.array(token_precision, dtype=np.int8),
+        'AV': av_q15,
+        'out': out_q15})
 
     return out_q15
 
@@ -266,7 +283,7 @@ def compute_expected(x_in, WQ, WK, WV, WO, W1, b1, W2, b2, ln1_gamma, ln1_beta, 
     res2_out = res1_out + mlp_out
     res2_out = np.clip(res2_out, -(1 << 15), (1 << 15) - 1)
 
-    return res2_out, mlp_out
+    return res2_out, mlp_out, ln1_out, attn_out
 
 @cocotb.test()
 async def vit_encoder_block_test(dut):
@@ -318,10 +335,10 @@ async def vit_encoder_block_test(dut):
     b1_real = np.random.uniform(-0.9, 0.9, H_MLP)
     W2_real = np.random.uniform(-0.9, 0.9, (H_MLP, EMB_DIM))
     b2_real = np.random.uniform(-0.9, 0.9, EMB_DIM)
-    ln1_gamma_real = np.random.uniform(0.5, 1.5, EMB_DIM)  # Non-zero for normalization
-    ln1_beta_real = np.random.uniform(-0.5, 0.5, EMB_DIM)
-    ln2_gamma_real = np.random.uniform(0.5, 1.5, EMB_DIM)
-    ln2_beta_real = np.random.uniform(-0.5, 0.5, EMB_DIM)
+    ln1_gamma_real = np.random.uniform(-10*2**-15, 10*2**-15, EMB_DIM)  # Non-zero for normalization
+    ln1_beta_real = np.random.uniform(-10*2**-15, 10*2**-15, EMB_DIM)
+    ln2_gamma_real = np.random.uniform(-10*2**-15, 10*2**-15, EMB_DIM)
+    ln2_beta_real = np.random.uniform(-10*2**-15, 10*2**-15, EMB_DIM)
 
     # Convert to Q1.15 format
     x_in_q15 = np.array([real_to_q1_15(val) for val in x_in_real.flatten()]).reshape(SEQ_LEN, EMB_DIM)
@@ -339,9 +356,11 @@ async def vit_encoder_block_test(dut):
     ln2_beta_q15 = np.array([real_to_q1_15(val) for val in ln2_beta_real])
 
     # Compute expected output
-    expected_out_real, mlp_out_real = compute_expected(x_in_q15, WQ_q15, WK_q15, WV_q15, WO_q15, W1_q15, b1_q15, W2_q15, b2_q15, ln1_gamma_q15, ln1_beta_q15, ln2_gamma_q15, ln2_beta_q15)
-    expected_out_q15 = np.array([real_to_q1_15(val) for val in expected_out_real.flatten()])
-    mlp_out_q15 = np.array([real_to_q1_15(val) for val in mlp_out_real.flatten()])
+    expected_out_q15, mlp_out_q15, ln1_out_q15, attn_out_q15 = \
+        compute_expected(x_in_q15, WQ_q15, WK_q15, WV_q15, WO_q15, W1_q15, b1_q15, W2_q15, b2_q15, ln1_gamma_q15, ln1_beta_q15, ln2_gamma_q15, ln2_beta_q15)
+    mlp_out_q15 = mlp_out_q15.flatten()
+    expected_out_q15 = expected_out_q15.flatten()
+    attn_out_q15 = attn_out_q15.flatten()
 
     # Drive inputs
     for i in range(SEQ_LEN * EMB_DIM):
@@ -382,8 +401,29 @@ async def vit_encoder_block_test(dut):
     assert dut.done.value == 1, "done not set"
 
     # Read and verify outputs
+    def unpack_row_major_reverse_rows(raw_int):
+        """
+        Unpack DUT x_out (rows stored in reverse order, elements LSB‑first)
+        into shape (SEQ_LEN, EMB_DIM).
+        """
+        mask = (1 << DATA_WIDTH) - 1
+        arr  = np.zeros((SEQ_LEN, EMB_DIM), dtype=np.int32)
+        for i in range(SEQ_LEN):
+            for j in range(EMB_DIM):
+                bit_idx = (((SEQ_LEN - 1 - i) * EMB_DIM) + j) * DATA_WIDTH
+                bits    = (raw_int >> bit_idx) & mask
+                if bits & (1 << (DATA_WIDTH - 1)):       # sign‑extend
+                    bits -= (1 << DATA_WIDTH)
+                arr[i, j] = bits
+        return arr
+    ln1_out_block = unpack_row_major_reverse_rows(int(dut.ln1_out.value))
+
+    attn_out_block = np.zeros(SEQ_LEN*EMB_DIM, dtype=np.int16)
+    for i in range(SEQ_LEN*EMB_DIM):
+        attn_out_block[i] = dut.attn_out[i].value.signed_integer
+
     mlp_out_block = np.zeros(EMB_DIM, dtype=np.int16)
-    for i in range( EMB_DIM):
+    for i in range(EMB_DIM):
         mlp_out_block[i] = dut.mlp_out[i].value.signed_integer
 
     out_block = np.zeros(SEQ_LEN * EMB_DIM, dtype=np.int16)
@@ -394,7 +434,19 @@ async def vit_encoder_block_test(dut):
     tolerance = 4  # Allow 4 LSBs of error due to fixed-point arithmetic
     success = True
 
-    for i in range( EMB_DIM):
+    assert np.array_equal(ln1_out_block, ln1_out_q15), f"\nExpected:\n{ln1_out_q15}\nGot:\n{ln1_out_block}"
+
+    for i in range(SEQ_LEN * EMB_DIM):
+        actual = attn_out_block[i]
+        expected = attn_out_q15[i]
+        if abs(actual - expected) > tolerance:
+            success = False
+            dut._log.error(f"Output attn[{i}] mismatch: expected {expected}, got {actual}")
+        else:
+            dut._log.info(f"Output attn[{i}] match: expected {expected}, got {actual}")
+    assert success
+
+    for i in range(EMB_DIM):
         actual = mlp_out_block[i]
         expected = mlp_out_q15[i]
         if abs(actual - expected) > tolerance:
