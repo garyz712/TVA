@@ -94,14 +94,29 @@ module vit_encoder_block #(
             x_in_flat[i*DATA_WIDTH +: DATA_WIDTH] = x_in[i];
         end
         // ln1_out to array
-        for (int i = 0; i < SEQ_LEN*EMB_DIM; i++) begin
-            ln1_out_array[i] = ln1_out[i*DATA_WIDTH +: DATA_WIDTH];
+        for (int i = 0; i < SEQ_LEN; i++) begin
+            for (int j = 0; j < EMB_DIM; j++) begin
+                ln1_out_array[i*SEQ_LEN+j] = ln1_out[((SEQ_LEN-1-i)*SEQ_LEN+j)*DATA_WIDTH +: DATA_WIDTH];
+            end
         end
         // ln2_out to array
-        for (int i = 0; i < SEQ_LEN*EMB_DIM; i++) begin
-            ln2_out_array[i] = ln2_out[i*DATA_WIDTH +: DATA_WIDTH];
-        end
+        // for (int i = 0; i < SEQ_LEN*EMB_DIM; i++) begin
+        //     ln2_out_array[i] = ln2_out[i*DATA_WIDTH +: DATA_WIDTH];
+        // end
         // attn_out to flattened
+        for (int i = 0; i < SEQ_LEN; i++) begin
+            for (int j = 0; j < EMB_DIM; j++) begin
+                ln2_out_array[i*SEQ_LEN+j] = ln2_out[((SEQ_LEN-1-i)*SEQ_LEN+j)*DATA_WIDTH +: DATA_WIDTH];
+            end
+        end
+
+        // for (int i = 0; i < SEQ_LEN*EMB_DIM; i++) begin
+        //     attn_out_flat[i*DATA_WIDTH +: DATA_WIDTH] = attn_out[i];
+        // end
+        // // mlp_out_array to flattened
+        // for (int i = 0; i < SEQ_LEN*EMB_DIM; i++) begin
+        //     mlp_out_flat[i*DATA_WIDTH +: DATA_WIDTH] = mlp_out_array[i];
+        // end
         for (int i = 0; i < SEQ_LEN*EMB_DIM; i++) begin
             attn_out_flat[i*DATA_WIDTH +: DATA_WIDTH] = attn_out[i];
         end
@@ -109,6 +124,7 @@ module vit_encoder_block #(
         for (int i = 0; i < SEQ_LEN*EMB_DIM; i++) begin
             mlp_out_flat[i*DATA_WIDTH +: DATA_WIDTH] = mlp_out_array[i];
         end
+
         // gamma/beta to flattened
         for (int i = 0; i < EMB_DIM; i++) begin
             ln1_gamma_flat[i*DATA_WIDTH +: DATA_WIDTH] = ln1_gamma[i];

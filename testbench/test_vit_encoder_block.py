@@ -204,7 +204,9 @@ def compute_attention_reference(x_np, wq_np, wk_np, wv_np, wo_np, seq_len, emb_d
             q15_val = q15_val - 0x10000
         out_q15.append(q15_val)
     out_q15 = np.array(out_q15, dtype=np.int16).reshape(l, e)
-    print({'Q': q.reshape(l, e),
+    print({
+        'input' : x_np.reshape(l * n, e),
+        'Q': q.reshape(l, e),
         'K': k.reshape(l, e),
         'V': v.reshape(l, e),
         'A': a.reshape(l, l),
@@ -270,7 +272,7 @@ def compute_expected(x_in, WQ, WK, WV, WO, W1, b1, W2, b2, ln1_gamma, ln1_beta, 
     attn_out = compute_attention_reference(ln1_out, WQ, WK, WV, WO, SEQ_LEN, EMB_DIM)
 
     # Residual 1: z1 = x_in + attn_out
-    res1_out = x_in + attn_out  # Direct addition in Q1.15
+    res1_out = np.int16(x_in) + np.int16(attn_out)  # Direct addition in Q1.15
     res1_out = np.clip(res1_out, -(1 << 15), (1 << 15) - 1)
 
     # LayerNorm 2
@@ -283,7 +285,7 @@ def compute_expected(x_in, WQ, WK, WV, WO, W1, b1, W2, b2, ln1_gamma, ln1_beta, 
     res2_out = res1_out + mlp_out
     res2_out = np.clip(res2_out, -(1 << 15), (1 << 15) - 1)
 
-    return res2_out, mlp_out, ln1_out, attn_out
+    return res2_out, mlp_out, res1_out, ln1_out, ln2_out, attn_out
 
 @cocotb.test()
 async def vit_encoder_block_test(dut):
@@ -356,7 +358,7 @@ async def vit_encoder_block_test(dut):
     ln2_beta_q15 = np.array([real_to_q1_15(val) for val in ln2_beta_real])
 
     # Compute expected output
-    expected_out_q15, mlp_out_q15, ln1_out_q15, attn_out_q15 = \
+    expected_out_q15, mlp_out_q15, res1_out_q15, ln1_out_q15, ln2_out_q15, attn_out_q15 = \
         compute_expected(x_in_q15, WQ_q15, WK_q15, WV_q15, WO_q15, W1_q15, b1_q15, W2_q15, b2_q15, ln1_gamma_q15, ln1_beta_q15, ln2_gamma_q15, ln2_beta_q15)
     mlp_out_q15 = mlp_out_q15.flatten()
     expected_out_q15 = expected_out_q15.flatten()
@@ -410,13 +412,25 @@ async def vit_encoder_block_test(dut):
         arr  = np.zeros((SEQ_LEN, EMB_DIM), dtype=np.int32)
         for i in range(SEQ_LEN):
             for j in range(EMB_DIM):
-                bit_idx = (((SEQ_LEN - 1 - i) * EMB_DIM) + j) * DATA_WIDTH
+                bit_idx = (((i) * EMB_DIM) + j) * DATA_WIDTH
                 bits    = (raw_int >> bit_idx) & mask
                 if bits & (1 << (DATA_WIDTH - 1)):       # sign‑extend
                     bits -= (1 << DATA_WIDTH)
                 arr[i, j] = bits
         return arr
     ln1_out_block = unpack_row_major_reverse_rows(int(dut.ln1_out.value))
+
+    ln1_out_block = np.zeros((SEQ_LEN, EMB_DIM), dtype=np.int16)
+    for i in range(SEQ_LEN):
+        for j in range(EMB_DIM):
+            ln1_out_block[i, j] = dut.ln1_out_array[i*SEQ_LEN+j].value.signed_integer
+
+    ln2_out_block = np.zeros((SEQ_LEN, EMB_DIM), dtype=np.int16)
+    for i in range(SEQ_LEN):
+        for j in range(EMB_DIM):
+            ln2_out_block[i, j] = dut.ln2_out_array[i*SEQ_LEN+j].value.signed_integer
+
+    res1_out_block = unpack_row_major_reverse_rows(int(dut.res1_out.value))
 
     attn_out_block = np.zeros(SEQ_LEN*EMB_DIM, dtype=np.int16)
     for i in range(SEQ_LEN*EMB_DIM):
@@ -435,6 +449,8 @@ async def vit_encoder_block_test(dut):
     success = True
 
     assert np.array_equal(ln1_out_block, ln1_out_q15), f"\nExpected:\n{ln1_out_q15}\nGot:\n{ln1_out_block}"
+    assert np.allclose(res1_out_block, res1_out_q15), f"\nExpected:\n{res1_out_q15}\nGot:\n{res1_out_block}"
+    assert np.array_equal(ln2_out_block, ln2_out_q15), f"\nExpected:\n{ln2_out_q15}\nGot:\n{ln2_out_block}"
 
     for i in range(SEQ_LEN * EMB_DIM):
         actual = attn_out_block[i]

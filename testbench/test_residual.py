@@ -27,8 +27,8 @@ async def test_residual_random(dut):
     await reset_dut(dut)
     
     # Generate random input matrices x_in and sub_in
-    x_np = np.random.randint(-100, 100, size=(SEQ_LEN, EMB_DIM)).astype(np.int32)
-    sub_np = np.random.randint(-100, 100, size=(SEQ_LEN, EMB_DIM)).astype(np.int32)
+    x_np = np.random.randint(-2**15, 2**15-1, size=(SEQ_LEN, EMB_DIM)).astype(np.int32)
+    sub_np = np.random.randint(-2**15, 2**15-1, size=(SEQ_LEN, EMB_DIM)).astype(np.int32)
     
     # Flatten and convert to binary for DUT input
     x_flat = x_np.flatten()
