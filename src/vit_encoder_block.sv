@@ -96,7 +96,7 @@ module vit_encoder_block #(
         // ln1_out to array
         for (int i = 0; i < SEQ_LEN; i++) begin
             for (int j = 0; j < EMB_DIM; j++) begin
-                ln1_out_array[i*SEQ_LEN+j] = ln1_out[((SEQ_LEN-1-i)*SEQ_LEN+j)*DATA_WIDTH +: DATA_WIDTH];
+                ln1_out_array[i*SEQ_LEN+j] = ln1_out[(i*SEQ_LEN+j)*DATA_WIDTH +: DATA_WIDTH];
             end
         end
         // ln2_out to array
@@ -106,7 +106,7 @@ module vit_encoder_block #(
         // attn_out to flattened
         for (int i = 0; i < SEQ_LEN; i++) begin
             for (int j = 0; j < EMB_DIM; j++) begin
-                ln2_out_array[i*SEQ_LEN+j] = ln2_out[((SEQ_LEN-1-i)*SEQ_LEN+j)*DATA_WIDTH +: DATA_WIDTH];
+                ln2_out_array[i*SEQ_LEN+j] = ln2_out[(i*SEQ_LEN+j)*DATA_WIDTH +: DATA_WIDTH];
             end
         end
 
