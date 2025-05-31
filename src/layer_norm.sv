@@ -6,6 +6,7 @@
 //
 // May 3 2025    Max Zhang      Initial version
 // May 3 2025    Tianwei Liu    Fix syntax issue
+// May 31 2025   Max Zhang      Modified to output rows in standard row-major order
 //------------------------------------------------------------------------------
 module layer_norm #(
     parameter int DATA_WIDTH = 16,
@@ -195,7 +196,7 @@ module layer_norm #(
 
                 //------------------------------------------------------
                 // Mean accumulation
-                //------------------------------------------------------
+                // ------------------------------------------------------
                 S_ROW_MEAN: begin
                     mean_acc <= new_mean_acc;
 
@@ -257,8 +258,7 @@ module layer_norm #(
                     out_valid <= 1'b1;
                     for (i = 0; i < SEQ_LEN; i++)
                         for (j = 0; j < EMB_DIM; j++)
-                            x_out[((SEQ_LEN-1-i)*EMB_DIM + j)*DATA_WIDTH +: DATA_WIDTH]
-                                   <= out_mem[i][j];
+                            x_out[(i*EMB_DIM + j)*DATA_WIDTH +: DATA_WIDTH] <= out_mem[i][j];
                 end
                 default: ;
             endcase
