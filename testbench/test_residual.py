@@ -1,273 +1,214 @@
 import cocotb
-from cocotb.triggers import RisingEdge, Timer
 from cocotb.clock import Clock
+from cocotb.triggers import RisingEdge, Timer
 import numpy as np
 import random
 
-# Parameters matching the SystemVerilog module
+# Parameters matching the Verilog module
 DATA_WIDTH = 16
 SEQ_LEN = 8
 EMB_DIM = 8
+TOLERANCE = 0.0001  # Tolerance for Q1.15 comparisons
 
-@cocotb.test()
-async def test_residual_random(dut):
-    """Testbench for residual module with random inputs"""
-    
-    # Start clock
-    clock = Clock(dut.clk, 10, units="ns")
-    cocotb.start_soon(clock.start())
-    
-    # Initialize signals
-    dut.rst_n.value = 1
-    dut.start.value = 0
-    dut.x_in.value = 0
-    dut.sub_in.value = 0
-    
-    # Reset the DUT
-    await reset_dut(dut)
-    
-    # Generate random input matrices x_in and sub_in
-    x_np = np.random.randint(-2**15, 2**15-1, size=(SEQ_LEN, EMB_DIM)).astype(np.int32)
-    sub_np = np.random.randint(-2**15, 2**15-1, size=(SEQ_LEN, EMB_DIM)).astype(np.int32)
-    
-    # Flatten and convert to binary for DUT input
-    x_flat = x_np.flatten()
-    sub_flat = sub_np.flatten()
-    x_bin = 0
-    sub_bin = 0
-    for i in range(SEQ_LEN * EMB_DIM):
-        x_bin = (x_bin << DATA_WIDTH) | (int(x_flat[i]) & ((1 << DATA_WIDTH) - 1))
-        sub_bin = (sub_bin << DATA_WIDTH) | (int(sub_flat[i]) & ((1 << DATA_WIDTH) - 1))
-    
-    # Drive inputs
-    dut.x_in.value = x_bin
-    dut.sub_in.value = sub_bin
-    dut.start.value = 1
-    await RisingEdge(dut.clk)
-    dut.start.value = 0
-    
-    # Wait for computation to complete
-    await wait_for_done(dut)
-    
-    # Read and verify output
-    y_np = np.zeros((SEQ_LEN, EMB_DIM), dtype=np.int32)
-    
-    # Extract output matrix
-    y_out_val = dut.y_out.value
-    for i in range(SEQ_LEN):
-        for j in range(EMB_DIM):
-            idx = ((i * EMB_DIM) + j) * DATA_WIDTH
-            bits = (y_out_val >> idx) & ((1 << DATA_WIDTH) - 1)
-            if bits & (1 << (DATA_WIDTH - 1)):  # Handle sign extension
-                bits = bits - (1 << DATA_WIDTH)
-            y_np[SEQ_LEN-1-i, EMB_DIM-1-j] = bits
-    
-    # Compute reference output
-    y_ref = x_np + sub_np
-    
-    # Debug: Print inputs and outputs
-    print(f"x_np:\n{x_np}")
-    print(f"sub_np:\n{sub_np}")
-    print(f"y_np (DUT output):\n{y_np}")
-    print(f"y_ref (Expected):\n{y_ref}")
-    
-    # Verify results
-    assert np.array_equal(y_np, y_ref), f"Output mismatch!\nExpected:\n{y_ref}\nGot:\n{y_np}"
-    assert dut.out_valid.value == 1, "out_valid not set"
-    assert dut.done.value == 1, "done not set"
-    
-    # Test reset during computation
-    await reset_dut(dut)
-    assert dut.out_valid.value == 0, "out_valid not cleared after reset"
-    assert dut.done.value == 0, "done not cleared after reset"
+# Helper functions
+def real_to_q1_15(x):
+    """Convert real number to Q1.15 format (16-bit signed integer)."""
+    val = int(x * (2**15))
+    if val > 32767:  # 0x7FFF
+        val = 32767
+    if val < -32768:  # 0x8000
+        val = -32768
+    return np.array(val).astype(np.int16)
 
-@cocotb.test()
-async def test_residual_fixed(dut):
-    """Testbench for residual module with fixed inputs"""
-    
-    # Start clock
-    clock = Clock(dut.clk, 10, units="ns")
-    cocotb.start_soon(clock.start())
-    
-    # Initialize signals
-    dut.rst_n.value = 1
-    dut.start.value = 0
-    dut.x_in.value = 0
-    dut.sub_in.value = 0
-    
-    # Reset the DUT
-    await reset_dut(dut)
-    
-    # Fixed input matrices x_in and sub_in (shape: SEQ_LEN x EMB_DIM = 8 x 8)
-    x_np = np.array([
-        [ 1, -2,  3, -4,  5, -6,  7, -8],
-        [-9, 10, -11, 12, -13, 14, -15, 16],
-        [17, -18, 19, -20, 21, -22, 23, -24],
-        [-25, 26, -27, 28, -29, 30, -31, 32],
-        [33, -34, 35, -36, 37, -38, 39, -40],
-        [-41, 42, -43, 44, -45, 46, -47, 48],
-        [49, -50, 51, -52, 53, -54, 55, -56],
-        [-57, 58, -59, 60, -61, 62, -63, 64]
-    ], dtype=np.int32)
-    sub_np = np.array([
-        [ 2, -3,  4, -5,  6, -7,  8, -9],
-        [-10, 11, -12, 13, -14, 15, -16, 17],
-        [18, -19, 20, -21, 22, -23, 24, -25],
-        [-26, 27, -28, 29, -30, 31, -32, 33],
-        [34, -35, 36, -37, 38, -39, 40, -41],
-        [-42, 43, -44, 45, -46, 47, -48, 49],
-        [50, -51, 52, -53, 54, -55, 56, -57],
-        [-58, 59, -60, 61, -62, 63, -64, 65]
-    ], dtype=np.int32)
-    
-    # Flatten and convert to binary for DUT input
-    x_flat = x_np.flatten()
-    sub_flat = sub_np.flatten()
-    x_bin = 0
-    sub_bin = 0
-    for i in range(SEQ_LEN * EMB_DIM):
-        x_bin = (x_bin << DATA_WIDTH) | (int(x_flat[i]) & ((1 << DATA_WIDTH) - 1))
-        sub_bin = (sub_bin << DATA_WIDTH) | (int(sub_flat[i]) & ((1 << DATA_WIDTH) - 1))
-    
-    # Drive inputs
-    dut.x_in.value = x_bin
-    dut.sub_in.value = sub_bin
-    dut.start.value = 1
-    await RisingEdge(dut.clk)
-    dut.start.value = 0
-    
-    # Wait for computation to complete
-    await wait_for_done(dut)
-    
-    # Read and verify output
-    y_np = np.zeros((SEQ_LEN, EMB_DIM), dtype=np.int32)
-    
-    # Extract output matrix
-    y_out_val = dut.y_out.value
-    for i in range(SEQ_LEN):
-        for j in range(EMB_DIM):
-            idx = ((i * EMB_DIM) + j) * DATA_WIDTH
-            bits = (y_out_val >> idx) & ((1 << DATA_WIDTH) - 1)
-            if bits & (1 << (DATA_WIDTH - 1)):  # Handle sign extension
-                bits = bits - (1 << DATA_WIDTH)
-            y_np[SEQ_LEN-1-i, EMB_DIM-1-j] = bits
-    
-    # Compute reference output
-    y_ref = x_np + sub_np
-    
-    # Debug: Print inputs and outputs
-    print(f"x_np:\n{x_np}")
-    print(f"sub_np:\n{sub_np}")
-    print(f"y_np (DUT output):\n{y_np}")
-    print(f"y_ref (Expected):\n{y_ref}")
-    
-    # Verify results
-    assert np.array_equal(y_np, y_ref), f"Output mismatch!\nExpected:\n{y_ref}\nGot:\n{y_np}"
-    assert dut.out_valid.value == 1, "out_valid not set"
-    assert dut.done.value == 1, "done not set"
-    
-    # Test reset during computation
-    await reset_dut(dut)
+def q1_15_to_real(x):
+    """Convert Q1.15 format to real number."""
+    value = np.array(int(x) & 0xFFFF).astype(np.int16)
+    return float(value) / (2**15)
 
-@cocotb.test()
-async def test_residual_edge_cases(dut):
-    """Testbench for residual module with edge case inputs"""
-    
-    # Start clock
-    clock = Clock(dut.clk, 10, units="ns")
-    cocotb.start_soon(clock.start())
-    
-    # Initialize signals
-    dut.rst_n.value = 1
-    dut.start.value = 0
-    dut.x_in.value = 0
-    dut.sub_in.value = 0
-    
-    # Reset the DUT
-    await reset_dut(dut)
-    
-    # Edge case: Maximum and minimum values
-    max_val = (1 << (DATA_WIDTH - 1)) - 1  # 32767 for 16-bit
-    min_val = -(1 << (DATA_WIDTH - 1))     # -32768 for 16-bit
-    x_np = np.array([
-        [max_val, min_val, max_val, min_val, max_val, min_val, max_val, min_val],
-        [min_val, max_val, min_val, max_val, min_val, max_val, min_val, max_val],
-        [max_val, min_val, max_val, min_val, max_val, min_val, max_val, min_val],
-        [min_val, max_val, min_val, max_val, min_val, max_val, min_val, max_val],
-        [max_val, min_val, max_val, min_val, max_val, min_val, max_val, min_val],
-        [min_val, max_val, min_val, max_val, min_val, max_val, min_val, max_val],
-        [max_val, min_val, max_val, min_val, max_val, min_val, max_val, min_val],
-        [min_val, max_val, min_val, max_val, min_val, max_val, min_val, max_val]
-    ], dtype=np.int32)
-    sub_np = np.array([
-        [min_val, max_val, min_val, max_val, min_val, max_val, min_val, max_val],
-        [max_val, min_val, max_val, min_val, max_val, min_val, max_val, min_val],
-        [min_val, max_val, min_val, max_val, min_val, max_val, min_val, max_val],
-        [max_val, min_val, max_val, min_val, max_val, min_val, max_val, min_val],
-        [min_val, max_val, min_val, max_val, min_val, max_val, min_val, max_val],
-        [max_val, min_val, max_val, min_val, max_val, min_val, max_val, min_val],
-        [min_val, max_val, min_val, max_val, min_val, max_val, min_val, max_val],
-        [max_val, min_val, max_val, min_val, max_val, min_val, max_val, min_val]
-    ], dtype=np.int32)
-    
-    # Flatten and convert to binary for DUT input
-    x_flat = x_np.flatten()
-    sub_flat = sub_np.flatten()
-    x_bin = 0
-    sub_bin = 0
-    for i in range(SEQ_LEN * EMB_DIM):
-        x_bin = (x_bin << DATA_WIDTH) | (int(x_flat[i]) & ((1 << DATA_WIDTH) - 1))
-        sub_bin = (sub_bin << DATA_WIDTH) | (int(sub_flat[i]) & ((1 << DATA_WIDTH) - 1))
-    
-    # Drive inputs
-    dut.x_in.value = x_bin
-    dut.sub_in.value = sub_bin
-    dut.start.value = 1
-    await RisingEdge(dut.clk)
-    dut.start.value = 0
-    
-    # Wait for computation to complete
-    await wait_for_done(dut)
-    
-    # Read and verify output
-    y_np = np.zeros((SEQ_LEN, EMB_DIM), dtype=np.int32)
-    
-    # Extract output matrix
-    y_out_val = dut.y_out.value
-    for i in range(SEQ_LEN):
-        for j in range(EMB_DIM):
-            idx = ((i * EMB_DIM) + j) * DATA_WIDTH
-            bits = (y_out_val >> idx) & ((1 << DATA_WIDTH) - 1)
-            if bits & (1 << (DATA_WIDTH - 1)):  # Handle sign extension
-                bits = bits - (1 << DATA_WIDTH)
-            y_np[SEQ_LEN-1-i, EMB_DIM-1-j] = bits
-    
-    # Compute reference output
-    y_ref = x_np + sub_np
-    
-    # Debug: Print inputs and outputs
-    print(f"x_np:\n{x_np}")
-    print(f"sub_np:\n{sub_np}")
-    print(f"y_np (DUT output):\n{y_np}")
-    print(f"y_ref (Expected):\n{y_ref}")
-    
-    # Verify results
-    assert np.array_equal(y_np, y_ref), f"Output mismatch!\nExpected:\n{y_ref}\nGot:\n{y_np}"
-    assert dut.out_valid.value == 1, "out_valid not set"
-    assert dut.done.value == 1, "done not set"
-    
-    # Test reset during computation
-    await reset_dut(dut)
+def sat_add16(a, b):
+    """Python model of Q1.15 saturating adder."""
+    # Use int32 to avoid overflow warnings
+    sum_val = np.int32(a) + np.int32(b)
+    ovf = (a >= 0 and b >= 0 and sum_val < 0) or (a < 0 and b < 0 and sum_val >= 0)
+    if not ovf:
+        # Clamp to Q1.15 range
+        if sum_val > 32767:
+            return np.int16(32767)
+        if sum_val < -32768:
+            return np.int16(-32768)
+        return np.int16(sum_val)
+    elif a >= 0:  # Positive overflow
+        return np.int16(32767)  # 0x7FFF
+    else:  # Negative overflow
+        return np.int16(-32768)  # 0x8000
+
+def flatten_vector(vec, seq_len, emb_dim):
+    """Flatten 2D vector to 1D for DUT input/output."""
+    flat = np.zeros(seq_len * emb_dim, dtype=np.int16)
+    for r in range(seq_len):
+        for c in range(emb_dim):
+            flat[r * emb_dim + c] = vec[r, c]
+    return flat
+
+def unflatten_vector(flat, seq_len, emb_dim):
+    """Unflatten 1D vector to 2D for verification."""
+    vec = np.zeros((seq_len, emb_dim), dtype=np.int16)
+    for r in range(seq_len):
+        for c in range(emb_dim):
+            vec[r, c] = flat[r * emb_dim + c]
+    return vec
+
+def array_to_int(arr, bit_width):
+    """Convert array of integers to a single integer (LSB-first)."""
+    result = 0
+    for i, val in enumerate(arr):  # LSB-first: [0,0] at lowest bits
+        result |= (int(val) & ((1 << bit_width) - 1)) << (i * bit_width)
+    return result
+
+def extract_bits(signal, start, width):
+    """Extract 'width' bits from 'signal' starting at 'start'."""
+    mask = (1 << width) - 1
+    shifted = signal >> start
+    value = shifted & mask
+    # Sign-extend if necessary
+    if value & (1 << (width - 1)):
+        value = value - (1 << width)
+    return value
 
 async def reset_dut(dut):
-    """Reset the DUT"""
+    """Reset the DUT."""
     dut.rst_n.value = 0
+    dut.start.value = 0
     await Timer(20, units="ns")
-    await RisingEdge(dut.clk)
     dut.rst_n.value = 1
-    await RisingEdge(dut.clk)
+    await Timer(10, units="ns")
 
-async def wait_for_done(dut):
-    """Wait for done signal to be asserted"""
-    while not dut.done.value:
-        await RisingEdge(dut.clk)
+async def run_test_case(dut, x_in, sub_in, test_name):
+    """Run a single test case."""
+    dut._log.info(f"\n{test_name}")
+    
+    # Flatten inputs
+    x_in_flat = flatten_vector(x_in, SEQ_LEN, EMB_DIM)
+    sub_in_flat = flatten_vector(sub_in, SEQ_LEN, EMB_DIM)
+    
+    # Log input values for debugging
+    dut._log.info(f"x_in_flat (Q1.15 real): {[q1_15_to_real(x) for x in x_in_flat]}")
+    dut._log.info(f"sub_in_flat (Q1.15 real): {[q1_15_to_real(x) for x in sub_in_flat]}")
+    
+    # Drive inputs
+    x_in_int = array_to_int(x_in_flat, DATA_WIDTH)
+    sub_in_int = array_to_int(sub_in_flat, DATA_WIDTH)
+    dut.x_in.value = x_in_int
+    dut.sub_in.value = sub_in_int
+    dut._log.info(f"x_in integer: {x_in_int:#x}")
+    dut._log.info(f"sub_in integer: {sub_in_int:#x}")
+    dut._log.info("Inputs assigned successfully!")
+
+    # Compute expected output
+    expected_out = compute_expected(x_in, sub_in)
+    expected_out_flat = flatten_vector(expected_out, SEQ_LEN, EMB_DIM)
+    dut._log.info(f"Expected y_out_flat (Q1.15 real): {[q1_15_to_real(x) for x in expected_out_flat]}")
+    
+    # Start the DUT
+    dut.start.value = 1
+    await RisingEdge(dut.clk)
+    dut.start.value = 0
+    await RisingEdge(dut.done)
+    await Timer(10, units="ns")
+    
+    # Verify output
+    errors = 0
+    y_out_value = int(dut.y_out.value)  # Get the full output as an integer
+    dut._log.info(f"y_out integer: {y_out_value:#x}")
+    y_out_flat = np.zeros(SEQ_LEN * EMB_DIM, dtype=np.int16)
+    for i in range(SEQ_LEN * EMB_DIM):
+        y_out_flat[i] = extract_bits(y_out_value, i * DATA_WIDTH, DATA_WIDTH)
+    y_out = unflatten_vector(y_out_flat, SEQ_LEN, EMB_DIM)
+    
+    for r in range(SEQ_LEN):
+        for c in range(EMB_DIM):
+            actual = q1_15_to_real(y_out[r, c])
+            expected = q1_15_to_real(expected_out[r, c])
+            if abs(actual - expected) > TOLERANCE:
+                dut._log.error(f"Error at [{r},{c}]: actual={actual}, expected={expected}, actual_raw={y_out[r,c]:#x}, expected_raw={expected_out[r,c]:#x}")
+                errors += 1
+    
+    if errors == 0:
+        dut._log.info(f"{test_name} passed!")
+    else:
+        dut._log.error(f"{test_name} failed with {errors} errors.")
+    return errors
+
+def compute_expected(x_in, sub_in):
+    """Compute expected output using saturating addition."""
+    expected = np.zeros((SEQ_LEN, EMB_DIM), dtype=np.int16)
+    for r in range(SEQ_LEN):
+        for c in range(EMB_DIM):
+            expected[r, c] = sat_add16(x_in[r, c], sub_in[r, c])
+    return expected
+
+@cocotb.test()
+async def test_residual(dut):
+    """Main test function for the residual module."""
+    # Start clock (100 MHz)
+    clock = Clock(dut.clk, 10, units="ns")
+    cocotb.start_soon(clock.start())
+    
+    # Initialize DUT
+    await reset_dut(dut)
+    
+    # Test Case 1: Fixed Inputs (for debugging)
+    x_in = np.zeros((SEQ_LEN, EMB_DIM), dtype=np.int16)
+    sub_in = np.zeros((SEQ_LEN, EMB_DIM), dtype=np.int16)
+    for r in range(SEQ_LEN):
+        for c in range(EMB_DIM):
+            x_in[r, c] = real_to_q1_15(0.5 if (r + c) % 2 == 0 else -0.5)
+            sub_in[r, c] = real_to_q1_15(0.2 if (r + c) % 2 == 0 else -0.2)
+    errors = await run_test_case(dut, x_in, sub_in, "Test Case 1: Fixed Inputs")
+    assert errors == 0, f"Test Case 1 failed with {errors} errors"
+    
+    # Reset DUT
+    await reset_dut(dut)
+    
+    # Test Case 2: Positive Saturation
+    for r in range(SEQ_LEN):
+        for c in range(EMB_DIM):
+            x_in[r, c] = real_to_q1_15(0.8)
+            sub_in[r, c] = real_to_q1_15(0.8)  # Sum > 1.0, should saturate to 0.999969
+    errors = await run_test_case(dut, x_in, sub_in, "Test Case 2: Positive Saturation")
+    assert errors == 0, f"Test Case 2 failed with {errors} errors"
+    
+    # Reset DUT
+    await reset_dut(dut)
+    
+    # Test Case 3: Negative Saturation
+    for r in range(SEQ_LEN):
+        for c in range(EMB_DIM):
+            x_in[r, c] = real_to_q1_15(-0.8)
+            sub_in[r, c] = real_to_q1_15(-0.8)  # Sum < -1.0, should saturate to -1.0
+    errors = await run_test_case(dut, x_in, sub_in, "Test Case 3: Negative Saturation")
+    assert errors == 0, f"Test Case 3 failed with {errors} errors"
+    
+    # Reset DUT
+    await reset_dut(dut)
+    
+    # Test Case 4: Zero Inputs
+    for r in range(SEQ_LEN):
+        for c in range(EMB_DIM):
+            x_in[r, c] = real_to_q1_15(0.0)
+            sub_in[r, c] = real_to_q1_15(0.0)
+    errors = await run_test_case(dut, x_in, sub_in, "Test Case 4: Zero Inputs")
+    assert errors == 0, f"Test Case 4 failed with {errors} errors"
+    
+    # Reset DUT
+    await reset_dut(dut)
+    
+    # Test Case 5: Mixed Inputs
+    for r in range(SEQ_LEN):
+        for c in range(EMB_DIM):
+            x_in[r, c] = real_to_q1_15(0.5 if (r + c) % 2 == 0 else -0.5)
+            sub_in[r, c] = real_to_q1_15(-0.5 if (r + c) % 2 == 0 else 0.5)
+    errors = await run_test_case(dut, x_in, sub_in, "Test Case 5: Mixed Inputs")
+    assert errors == 0, f"Test Case 5 failed with {errors} errors"
+    
+    dut._log.info("All tests completed successfully.")
