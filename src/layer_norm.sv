@@ -269,6 +269,6 @@ module layer_norm #(
     // Cheap placeholder inv-sqrt
     // ------------------------------------------------------------------
     function automatic logic [31:0] approximate_inv_sqrt(input logic [31:0] val);
-        return (val == 0) ? 32'd0 : 32'd10;
+        return (val == 0) ? 32'd0 : 32'd01;
     endfunction
 endmodule
