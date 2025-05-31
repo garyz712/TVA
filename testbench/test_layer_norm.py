@@ -1,4 +1,3 @@
-# test_layer_norm.py  – drop‑in replacement
 import cocotb
 from cocotb.clock     import Clock
 from cocotb.triggers  import RisingEdge, Timer
@@ -11,38 +10,38 @@ import logging
 DATA_WIDTH = 16
 SEQ_LEN    = 8
 EMB_DIM    = 8
-EPSILON    = 0x34000000           # ≈1e‑5 as 32‑bit integer
+EPSILON    = 0x34000000           # ≈1e-5 as 32-bit integer
 H_MLP = 32
 
 # --------------------------------------------------------------------
 # Utility helpers
 # --------------------------------------------------------------------
 def pack_lsb_first(values):
-    """Pack iterable of ints into a single int, element‑0 in the LSB."""
+    """Pack iterable of ints into a single int, element-0 in the LSB."""
     mask = (1 << DATA_WIDTH) - 1
     packed = 0
-    for v in reversed(values):                # reverse → index‑0 ends in LSB
+    for v in reversed(values):                # reverse → index-0 ends in LSB
         packed = (packed << DATA_WIDTH) | (int(v) & mask)
     return packed
 
-def unpack_row_major_reverse_rows(raw_int):
+def unpack_row_major(raw_int):
     """
-    Unpack DUT x_out (rows stored in reverse order, elements LSB‑first)
+    Unpack DUT x_out (rows stored in standard row-major order, elements LSB-first)
     into shape (SEQ_LEN, EMB_DIM).
     """
     mask = (1 << DATA_WIDTH) - 1
-    arr  = np.zeros((SEQ_LEN, EMB_DIM), dtype=np.int32)
+    arr = np.zeros((SEQ_LEN, EMB_DIM), dtype=np.int32)
     for i in range(SEQ_LEN):
         for j in range(EMB_DIM):
-            bit_idx = (((SEQ_LEN - 1 - i) * EMB_DIM) + j) * DATA_WIDTH
-            bits    = (raw_int >> bit_idx) & mask
-            if bits & (1 << (DATA_WIDTH - 1)):       # sign‑extend
+            bit_idx = (i * EMB_DIM + j) * DATA_WIDTH
+            bits = (raw_int >> bit_idx) & mask
+            if bits & (1 << (DATA_WIDTH - 1)):       # sign-extend
                 bits -= (1 << DATA_WIDTH)
             arr[i, j] = bits
     return arr
 
 def compute_layer_norm_reference(x_np, gamma_np, beta_np):
-    """Software model that mirrors the RTL maths (incl. fake inv‑sqrt)."""
+    """Software model that mirrors the RTL maths (incl. fake inv-sqrt)."""
     out = np.zeros_like(x_np, dtype=np.int32)
     maxv = (1 << (DATA_WIDTH - 1)) - 1
     minv = -(1 << (DATA_WIDTH - 1))
@@ -51,7 +50,7 @@ def compute_layer_norm_reference(x_np, gamma_np, beta_np):
         diff    = x_np[i] - mean
         var     = np.sum(diff * diff) // EMB_DIM
         denom   = var + EPSILON
-        inv_std = 10 if denom != 0 else 0            # placeholder inverse‑sqrt
+        inv_std = 10 if denom != 0 else 0            # placeholder inverse-sqrt
         for j in range(EMB_DIM):
             tmp   = (x_np[i, j] - mean) * inv_std
             val   = tmp * gamma_np[j] + beta_np[j]
@@ -79,7 +78,7 @@ logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
 def start_clock(dut):
-    """Start a free‑running 10 ns clock on dut.clk."""
+    """Start a free-running 10 ns clock on dut.clk."""
     cocotb.start_soon(Clock(dut.clk, 10, units="ns").start())
 
 @cocotb.test()
@@ -98,33 +97,16 @@ async def test_layer_norm_random(dut):
 
     np.random.seed(42)  # For reproducibility
     x_in_real = np.random.uniform(-0.9, 0.9, (SEQ_LEN, EMB_DIM))
-    WQ_real = np.random.uniform(-0.9, 0.9, (EMB_DIM, EMB_DIM))
-    WK_real = np.random.uniform(-0.9, 0.9, (EMB_DIM, EMB_DIM))
-    WV_real = np.random.uniform(-0.9, 0.9, (EMB_DIM, EMB_DIM))
-    WO_real = np.random.uniform(-0.9, 0.9, (EMB_DIM, EMB_DIM))
-    W1_real = np.random.uniform(-0.9, 0.9, (EMB_DIM, H_MLP))
-    b1_real = np.random.uniform(-0.9, 0.9, H_MLP)
-    W2_real = np.random.uniform(-0.9, 0.9, (H_MLP, EMB_DIM))
-    b2_real = np.random.uniform(-0.9, 0.9, EMB_DIM)
     ln1_gamma_real = np.random.uniform(-10*2**-15, 10*2**-15, EMB_DIM)  # Non-zero for normalization
     ln1_beta_real = np.random.uniform(-10*2**-15, 10*2**-15, EMB_DIM)
-    ln2_gamma_real = np.random.uniform(-10*2**-15, 10*2**-15, EMB_DIM)
-    ln2_beta_real = np.random.uniform(-10*2**-15, 10*2**-15, EMB_DIM)
+
 
     # Convert to Q1.15 format
     x_np = np.array([real_to_q1_15(val) for val in x_in_real.flatten()]).reshape(SEQ_LEN, EMB_DIM)
-    WQ_q15 = np.array([real_to_q1_15(val) for val in WQ_real.flatten()]).reshape(EMB_DIM, EMB_DIM)
-    WK_q15 = np.array([real_to_q1_15(val) for val in WK_real.flatten()]).reshape(EMB_DIM, EMB_DIM)
-    WV_q15 = np.array([real_to_q1_15(val) for val in WV_real.flatten()]).reshape(EMB_DIM, EMB_DIM)
-    WO_q15 = np.array([real_to_q1_15(val) for val in WO_real.flatten()]).reshape(EMB_DIM, EMB_DIM)
-    W1_q15 = np.array([real_to_q1_15(val) for val in W1_real.flatten()]).reshape(EMB_DIM, H_MLP)
-    b1_q15 = np.array([real_to_q1_15(val) for val in b1_real])
-    W2_q15 = np.array([real_to_q1_15(val) for val in W2_real.flatten()]).reshape(H_MLP, EMB_DIM)
-    b2_q15 = np.array([real_to_q1_15(val) for val in b2_real])
+
     gamma_np = np.array([real_to_q1_15(val) for val in ln1_gamma_real])
     beta_np = np.array([real_to_q1_15(val) for val in ln1_beta_real])
-    ln2_gamma_q15 = np.array([real_to_q1_15(val) for val in ln2_gamma_real])
-    ln2_beta_q15 = np.array([real_to_q1_15(val) for val in ln2_beta_real])
+
 
     dut.x_in.value     = pack_lsb_first(x_np.flatten())
     dut.gamma_in.value = pack_lsb_first(gamma_np)
@@ -136,7 +118,7 @@ async def test_layer_norm_random(dut):
 
     await wait_for_done(dut)
 
-    got = unpack_row_major_reverse_rows(int(dut.x_out.value))
+    got = unpack_row_major(int(dut.x_out.value))
     exp = compute_layer_norm_reference(x_np, gamma_np, beta_np)
 
     print(exp)
@@ -144,7 +126,7 @@ async def test_layer_norm_random(dut):
 
     assert np.array_equal(got, exp), f"\nExpected:\n{exp}\nGot:\n{got}"
     assert dut.done.value and dut.out_valid.value
-    logger.info("Random‑vector test passed")
+    logger.info("Random-vector test passed")
 
     await reset_dut(dut)
     assert not dut.done.value and not dut.out_valid.value
@@ -178,12 +160,12 @@ async def test_layer_norm_fixed(dut):
 
     await wait_for_done(dut)
 
-    got = unpack_row_major_reverse_rows(int(dut.x_out.value))
+    got = unpack_row_major(int(dut.x_out.value))
     exp = compute_layer_norm_reference(x_np, gamma_np, beta_np)
 
     assert np.array_equal(got, exp), f"\nExpected:\n{exp}\nGot:\n{got}"
     assert dut.done.value and dut.out_valid.value
-    logger.info("Fixed‑vector test passed")
+    logger.info("Fixed-vector test passed")
 
 @cocotb.test()
 async def test_layer_norm_edge_cases(dut):
@@ -210,9 +192,9 @@ async def test_layer_norm_edge_cases(dut):
 
     await wait_for_done(dut)
 
-    got = unpack_row_major_reverse_rows(int(dut.x_out.value))
+    got = unpack_row_major(int(dut.x_out.value))
     exp = compute_layer_norm_reference(x_np, gamma_np, beta_np)
 
     assert np.array_equal(got, exp), f"\nExpected:\n{exp}\nGot:\n{got}"
     assert dut.done.value and dut.out_valid.value
-    logger.info("Edge‑case test passed")
+    logger.info("Edge-case test passed")
