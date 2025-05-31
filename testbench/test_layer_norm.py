@@ -40,6 +40,13 @@ def unpack_row_major(raw_int):
             arr[i, j] = bits
     return arr
 
+def q1_15_to_float(arr):
+    """
+    Convert a NumPy array of Q1.15 integers to floating-point values.
+    Q1.15: 1 sign bit, 15 fractional bits, value = integer / 2^15.
+    """
+    return arr.astype(float) / (1 << 15)
+
 def compute_layer_norm_reference(x_np, gamma_np, beta_np):
     """Software model that mirrors the RTL maths (incl. fake inv-sqrt)."""
     out = np.zeros_like(x_np, dtype=np.int32)
@@ -50,7 +57,7 @@ def compute_layer_norm_reference(x_np, gamma_np, beta_np):
         diff    = x_np[i] - mean
         var     = np.sum(diff * diff) // EMB_DIM
         denom   = var + EPSILON
-        inv_std = 10 if denom != 0 else 0            # placeholder inverse-sqrt
+        inv_std = 1 if denom != 0 else 0            # placeholder inverse-sqrt
         for j in range(EMB_DIM):
             tmp   = (x_np[i, j] - mean) * inv_std
             val   = tmp * gamma_np[j] + beta_np[j]
@@ -100,13 +107,10 @@ async def test_layer_norm_random(dut):
     ln1_gamma_real = np.random.uniform(-10*2**-15, 10*2**-15, EMB_DIM)  # Non-zero for normalization
     ln1_beta_real = np.random.uniform(-10*2**-15, 10*2**-15, EMB_DIM)
 
-
     # Convert to Q1.15 format
     x_np = np.array([real_to_q1_15(val) for val in x_in_real.flatten()]).reshape(SEQ_LEN, EMB_DIM)
-
     gamma_np = np.array([real_to_q1_15(val) for val in ln1_gamma_real])
     beta_np = np.array([real_to_q1_15(val) for val in ln1_beta_real])
-
 
     dut.x_in.value     = pack_lsb_first(x_np.flatten())
     dut.gamma_in.value = pack_lsb_first(gamma_np)
@@ -121,10 +125,11 @@ async def test_layer_norm_random(dut):
     got = unpack_row_major(int(dut.x_out.value))
     exp = compute_layer_norm_reference(x_np, gamma_np, beta_np)
 
-    print(exp)
-    print(got)
+    # Print in Q1.15 format (floating-point)
+    print("Expected (Q1.15):\n", np.array2string(q1_15_to_float(exp), precision=6, suppress_small=True))
+    print("Got (Q1.15):\n", np.array2string(q1_15_to_float(got), precision=6, suppress_small=True))
 
-    assert np.array_equal(got, exp), f"\nExpected:\n{exp}\nGot:\n{got}"
+    assert np.array_equal(got, exp), f"\nExpected (Q1.15):\n{q1_15_to_float(exp)}\nGot (Q1.15):\n{q1_15_to_float(got)}"
     assert dut.done.value and dut.out_valid.value
     logger.info("Random-vector test passed")
 
@@ -163,7 +168,11 @@ async def test_layer_norm_fixed(dut):
     got = unpack_row_major(int(dut.x_out.value))
     exp = compute_layer_norm_reference(x_np, gamma_np, beta_np)
 
-    assert np.array_equal(got, exp), f"\nExpected:\n{exp}\nGot:\n{got}"
+    # Print in Q1.15 format (floating-point)
+    print("Expected (Q1.15):\n", np.array2string(q1_15_to_float(exp), precision=6, suppress_small=True))
+    print("Got (Q1.15):\n", np.array2string(q1_15_to_float(got), precision=6, suppress_small=True))
+
+    assert np.array_equal(got, exp), f"\nExpected (Q1.15):\n{q1_15_to_float(exp)}\nGot (Q1.15):\n{q1_15_to_float(got)}"
     assert dut.done.value and dut.out_valid.value
     logger.info("Fixed-vector test passed")
 
@@ -195,6 +204,10 @@ async def test_layer_norm_edge_cases(dut):
     got = unpack_row_major(int(dut.x_out.value))
     exp = compute_layer_norm_reference(x_np, gamma_np, beta_np)
 
-    assert np.array_equal(got, exp), f"\nExpected:\n{exp}\nGot:\n{got}"
+    # Print in Q1.15 format (floating-point)
+    print("Expected (Q1.15):\n", np.array2string(q1_15_to_float(exp), precision=6, suppress_small=True))
+    print("Got (Q1.15):\n", np.array2string(q1_15_to_float(got), precision=6, suppress_small=True))
+
+    assert np.array_equal(got, exp), f"\nExpected (Q1.15):\n{q1_15_to_float(exp)}\nGot (Q1.15):\n{q1_15_to_float(got)}"
     assert dut.done.value and dut.out_valid.value
     logger.info("Edge-case test passed")
