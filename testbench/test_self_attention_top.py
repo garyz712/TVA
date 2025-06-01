@@ -233,6 +233,7 @@ def compute_expected(x, wq, wk, wv, wo):
                 else:
                     v_val = q1_15_to_real(raw_v)
                 av_out[i, j] += a_val * v_val
+                av_out[i, j] = np.clip(av_out[i, j], -2.0, 1.999999999)
     av_out = np.clip(av_out, -1.0, 0.999969482421875)
     av_q15 = np.vectorize(real_to_q1_15)(av_out)
 
