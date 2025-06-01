@@ -5,17 +5,16 @@ import numpy as np
 import random
 
 # Parameters
-L = 8
+L = 16
 N = 1
-E = 8
+E = 16
 WIDTH = 16
 MAX_VAL = (1 << (WIDTH - 1)) - 1
 TOLERANCE = 0.005  # Increased tolerance due to fixed-point approximation of 1/sqrt(8)
 
 # Constants for sqrt(8) division
-SQRT_8 = np.sqrt(8.0)  # ≈ 2.828
-INV_SQRT_8 = 1.0 / SQRT_8  # ≈ 0.354
-INV_SQRT_8_Q15 = 0x2D50  # Hardware constant (11,600 in decimal)
+SQRT_E = np.sqrt(16.0)  # ≈ 2.828
+INV_SQRT_E = 1.0 / SQRT_E  # ≈ 0.354
 
 # ----------------------
 # Fixed-point helpers
@@ -27,6 +26,8 @@ def real_to_q1_15(x):
     if val < -32768:
         val = -32768
     return np.array(val).astype(np.int16)
+
+INV_SQRT_E_Q15 = real_to_q1_15(INV_SQRT_E)  # Hardware constant (11,600 in decimal)
 
 def q1_15_to_real(x):
     value = np.array(int(x) & 0xFFFF).astype(np.int16)
@@ -55,7 +56,7 @@ def hw_multiply_inv_sqrt8(matmul_result_q30):
     """
     # Convert to signed 32-bit for multiplication
     matmul_signed = np.array(matmul_result_q30).astype(np.int32)
-    inv_sqrt8_signed = np.int16(INV_SQRT_8_Q15)
+    inv_sqrt8_signed = np.int16(INV_SQRT_E_Q15)
     
     # 48-bit multiplication result
     mult_result = np.int64(matmul_signed) * np.int64(inv_sqrt8_signed)
@@ -117,9 +118,10 @@ def compute_expected(q, k):
                 q_val = q1_15_to_real(q_np[i, e])
                 k_val = q1_15_to_real(k_np[j, 0, e])  # N=1
                 matmul_result[i, j] += q_val * k_val
+
+        matmul_result = np.clip(matmul_result, -2.0, 1.999999999)
     
     # Clip matmul result to 32-bit range
-    matmul_result = np.clip(matmul_result, -2.0, 1.999999999)
     
     # Convert to Q1.30 for hardware-accurate division simulation
     matmul_q30 = np.vectorize(real_to_q1_30)(matmul_result)
