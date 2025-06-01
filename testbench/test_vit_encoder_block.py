@@ -201,6 +201,7 @@ def compute_attention_reference(x_np, wq_np, wk_np, wv_np, wo_np, seq_len, emb_d
                 else:
                     v_val = q1_15_to_real(raw_v)
                 av_out[i, j] += a_val * v_val
+            av_out[i, j] = np.clip(av_out[i, j], -2.0, 1.999999999)
     av_out = np.clip(av_out, -1.0, 0.999969482421875)
     av_q15 = np.vectorize(real_to_q1_15)(av_out)
 
@@ -317,8 +318,8 @@ async def vit_encoder_block_test(dut):
     """Testbench for vit_encoder_block module."""
     # Parameters
     DATA_WIDTH = 16
-    SEQ_LEN = 8
-    EMB_DIM = 8
+    SEQ_LEN = 16
+    EMB_DIM = 16
     H_MLP = 32
 
     # Start clock (10ns period)

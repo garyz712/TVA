@@ -15,8 +15,8 @@
 //------------------------------------------------------------------------------
 module vit_encoder_block #(
     parameter int DATA_WIDTH = 16,
-    parameter int SEQ_LEN    = 8,
-    parameter int EMB_DIM    = 8,
+    parameter int SEQ_LEN    = 16,
+    parameter int EMB_DIM    = 16,
     parameter int H_MLP      = 32,  // Hidden dimension in MLP
     parameter logic [31:0] EPS = 32'h34000000  // ~1e-5 for LayerNorm
 )(

@@ -10,8 +10,8 @@
 //------------------------------------------------------------------------------
 module layer_norm #(
     parameter int DATA_WIDTH = 16,
-    parameter int SEQ_LEN    = 8,   // number of tokens or rows
-    parameter int EMB_DIM    = 8,   // embedding dimension
+    parameter int SEQ_LEN    = 16,   // number of tokens or rows
+    parameter int EMB_DIM    = 16,   // embedding dimension
     parameter logic [31:0] EPS = 32'h34000000 // ~1e-5 in float, or small in fixed
 )(
     input  logic                                      clk,
