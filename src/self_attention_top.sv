@@ -14,7 +14,7 @@
 module self_attention_top #(
     parameter int DATA_WIDTH = 16,  // Data width (Q1.15 for FP16)
     parameter int L = 16,           // Sequence length
-    parameter int E = 16,           // Embedding dimension
+    parameter int E = 32,           // Embedding dimension
     parameter int N = 1            // Number of attention heads (fixed to 1)
 )(
     input  logic                           clk,
