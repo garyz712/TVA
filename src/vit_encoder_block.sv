@@ -16,9 +16,9 @@
 module vit_encoder_block #(
     parameter int DATA_WIDTH = 16,
     parameter int SEQ_LEN    = 16,
-    parameter int EMB_DIM    = 16,
+    parameter int EMB_DIM    = 32,
     parameter int H_MLP      = 32,  // Hidden dimension in MLP
-    parameter logic [31:0] EPS = 32'h34000000  // ~1e-5 for LayerNorm
+    parameter logic [31:0] EPS = 32'h000029f1// ~1e-5 for LayerNorm
 )(
     input  logic                                      clk,
     input  logic                                      rst_n, // Active-low reset
@@ -96,7 +96,7 @@ module vit_encoder_block #(
         // ln1_out to array
         for (int i = 0; i < SEQ_LEN; i++) begin
             for (int j = 0; j < EMB_DIM; j++) begin
-                ln1_out_array[i*SEQ_LEN+j] = ln1_out[(i*SEQ_LEN+j)*DATA_WIDTH +: DATA_WIDTH];
+                ln1_out_array[i*EMB_DIM+j] = ln1_out[(i*EMB_DIM+j)*DATA_WIDTH +: DATA_WIDTH];
             end
         end
         // ln2_out to array
@@ -106,7 +106,7 @@ module vit_encoder_block #(
         // attn_out to flattened
         for (int i = 0; i < SEQ_LEN; i++) begin
             for (int j = 0; j < EMB_DIM; j++) begin
-                ln2_out_array[i*SEQ_LEN+j] = ln2_out[(i*SEQ_LEN+j)*DATA_WIDTH +: DATA_WIDTH];
+                ln2_out_array[i*EMB_DIM+j] = ln2_out[(i*EMB_DIM+j)*DATA_WIDTH +: DATA_WIDTH];
             end
         end
 

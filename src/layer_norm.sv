@@ -138,7 +138,7 @@ module layer_norm #(
         new_var_acc = var_acc + (diff * diff);
         denom = row_var + EPSILON;
         inv_std = approximate_inv_sqrt(denom);
-        tmp_norm = (diff * inv_std) / 4;
+        tmp_norm = floor_div32((diff * inv_std), 4);
         gamma_val = {{16{gamma_arr[col_i][15]}}, gamma_arr[col_i]};
         beta_val = {{16{beta_arr[col_i][15]}}, beta_arr[col_i]};
         after_gamma = tmp_norm * gamma_val;
