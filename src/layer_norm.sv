@@ -11,8 +11,8 @@
 module layer_norm #(
     parameter int DATA_WIDTH = 16,
     parameter int SEQ_LEN    = 16,   // number of tokens or rows
-    parameter int EMB_DIM    = 16,   // embedding dimension
-    parameter logic [31:0] EPS = 32'h34000000 // ~1e-5 in float, or small in fixed
+    parameter int EMB_DIM    = 32,   // embedding dimension
+    parameter logic [31:0] EPS = 32'h000029f1 // ~1e-5 in float, or small in fixed
 )(
     input  logic                                      clk,
     input  logic                                      rst_n,
@@ -41,7 +41,8 @@ module layer_norm #(
     state_t curr_state, next_state;
 
     // Row / column indices
-    logic [2:0] row_i, col_i;   // 0-7
+    logic [$clog2(SEQ_LEN)-1:0] row_i;
+    logic [$clog2(EMB_DIM)-1:0] col_i;   // 0-7
 
     // ------------------------------------------------------------------
     // Memories
@@ -63,11 +64,11 @@ module layer_norm #(
     // Helper: fetch flattened x_in  (width-clean)
     // ------------------------------------------------------------------
     function automatic logic [DATA_WIDTH-1:0] get_x(
-        input logic [2:0] r,
-        input logic [2:0] c
+        input logic [$clog2(SEQ_LEN)-1:0] r,
+        input logic [$clog2(EMB_DIM)-1:0] c
     );
-        logic [31:0] r_ext = {29'b0, r};
-        logic [31:0] c_ext = {29'b0, c};
+        logic [31:0] r_ext = {'0, r};
+        logic [31:0] c_ext = {'0, c};
         logic [31:0] flat_idx = (r_ext * EMB_DIM) + c_ext;
         return x_in[(flat_idx * DATA_WIDTH) +: DATA_WIDTH];
     endfunction
@@ -99,14 +100,15 @@ module layer_norm #(
         next_state = curr_state;
         case (curr_state)
             S_IDLE     : if (start)         next_state = S_ROW_MEAN;
-            S_ROW_MEAN : if (col_i == 3'd7) next_state = S_ROW_VAR;
-            S_ROW_VAR  : if (col_i == 3'd7) next_state = S_ROW_NORM;
-            S_ROW_NORM : if (col_i == 3'd7) next_state = S_NEXT_ROW;
+            S_ROW_MEAN : if (col_i == EMB_DIM-1) next_state = S_ROW_VAR;
+            S_ROW_VAR  : if (col_i == EMB_DIM-1) next_state = S_ROW_NORM;
+            S_ROW_NORM : if (col_i == EMB_DIM-1) next_state = S_NEXT_ROW;
             S_NEXT_ROW : begin
-                if (row_i == 3'd7)
+                if (row_i == SEQ_LEN-1)
                     next_state = S_DONE;
-                else
+                else begin
                     next_state = S_ROW_MEAN;
+                end
             end
             S_DONE     :                   next_state = S_IDLE;
             default: ;
@@ -136,7 +138,7 @@ module layer_norm #(
         new_var_acc = var_acc + (diff * diff);
         denom = row_var + EPSILON;
         inv_std = approximate_inv_sqrt(denom);
-        tmp_norm = diff * inv_std;
+        tmp_norm = (diff * inv_std) / 4;
         gamma_val = {{16{gamma_arr[col_i][15]}}, gamma_arr[col_i]};
         beta_val = {{16{beta_arr[col_i][15]}}, beta_arr[col_i]};
         after_gamma = tmp_norm * gamma_val;
@@ -181,7 +183,7 @@ module layer_norm #(
                 S_IDLE: begin
                     for (i = 0; i < SEQ_LEN; i++)
                         for (j = 0; j < EMB_DIM; j++)
-                            x_mem[i][j] <= get_x(i[2:0], j[2:0]);
+                            x_mem[i][j] <= get_x(i, j);
 
                     for (j = 0; j < EMB_DIM; j++) begin
                         gamma_arr[j] <= gamma_in[(j*DATA_WIDTH) +: DATA_WIDTH];
@@ -200,7 +202,7 @@ module layer_norm #(
                 S_ROW_MEAN: begin
                     mean_acc <= new_mean_acc;
 
-                    if (col_i == 3'd7) begin
+                    if (col_i == EMB_DIM-1) begin
                         row_mean <= floor_div32(new_mean_acc, EMB_DIM);
                         col_i    <= 3'd0;
                         mean_acc <= 32'd0;
@@ -215,7 +217,7 @@ module layer_norm #(
                 S_ROW_VAR: begin
                     var_acc <= new_var_acc;
 
-                    if (col_i == 3'd7) begin
+                    if (col_i == EMB_DIM-1) begin
                         row_var <= floor_div32(new_var_acc, EMB_DIM);
                         col_i   <= 3'd0;
                         var_acc <= 32'd0;
@@ -235,7 +237,7 @@ module layer_norm #(
                     else
                         out_mem[row_i][col_i] <= final_val[15:0];
 
-                    if (col_i == 3'd7)
+                    if (col_i == EMB_DIM-1)
                         col_i <= 3'd0;
                     else
                         col_i <= col_i + 1;
@@ -243,7 +245,7 @@ module layer_norm #(
 
                 //------------------------------------------------------
                 S_NEXT_ROW: begin
-                    if (row_i < 3'd7)
+                    if (row_i < SEQ_LEN-1)
                         row_i <= row_i + 1;
 
                     row_mean <= 32'd0;
