@@ -65,13 +65,13 @@ def real_to_q1_7(x):
     return val & 0xFF
 
 # Constants for sqrt(8) division
-SQRT_8 = np.sqrt(8.0)  # ≈ 2.828
-INV_SQRT_8 = 1.0 / SQRT_8  # ≈ 0.354
-INV_SQRT_8_Q15 = 0x2D50  # Hardware constant (11,600 in decimal)
+SQRT_E = np.sqrt(16.0)  # ≈ 2.828
+INV_SQRT_E = 1.0 / SQRT_E  # ≈ 0.354
+INV_SQRT_E_Q15 = real_to_q1_15(INV_SQRT_E)  # Hardware constant (11,600 in decimal)
 
 def hw_multiply_inv_sqrt8(matmul_result_q30):
     matmul_signed = np.array(matmul_result_q30).astype(np.int32)
-    inv_sqrt8_signed = np.int16(INV_SQRT_8_Q15)
+    inv_sqrt8_signed = np.int16(INV_SQRT_E_Q15)
     mult_result = np.int64(matmul_signed) * np.int64(inv_sqrt8_signed)
     q30_result = (mult_result >> 15) & 0xFFFFFFFF
     if q30_result & 0x80000000:
@@ -391,6 +391,7 @@ async def run_test(dut, x, wq, wk, wv, wo, test_name):
 
     # Check final output
     out_dut = read_dut_array(dut.out, L * E, (L, E))
+    np.save(f"../verilog_out/self_attention_out.npy", out_dut)
     for i in range(L):
         for j in range(E):
             out_actual = q1_15_to_real(out_dut[i, j])
@@ -410,6 +411,23 @@ async def run_test(dut, x, wq, wk, wv, wo, test_name):
         dut._log.error(f"Test {test_name} FAILED")
     
     return passed
+
+@cocotb.test()
+async def test_generate_for_colab(dut):
+    clock = Clock(dut.clk, 10, units="ns")
+    cocotb.start_soon(clock.start())
+
+    await reset_dut(dut)
+
+    wq = np.load(f"../verilog_inputs/wq_np.npy")
+    wk = np.load(f"../verilog_inputs/wk_np.npy")
+    wv = np.load(f"../verilog_inputs/wv_np.npy")
+    wo = np.load(f"../verilog_inputs/wo_np.npy")
+
+    for b in range(10):
+        x = np.load(f"../verilog_inputs/x_ln_np_{b}.npy")
+        await run_test(dut, x, wq, wk, wv, wo, "Actual Input")
+
 
 # ----------------------
 # Main test function
