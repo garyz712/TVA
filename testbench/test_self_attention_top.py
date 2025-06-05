@@ -278,17 +278,17 @@ def compute_expected(x, wq, wk, wv, wo):
 # Generate test case
 # ----------------------
 def generate_test_case():
-    x = np.array([real_to_q1_15(random.uniform(-0.9, 0.9)) for _ in range(L * E)], dtype=np.int16).reshape(L * N, E)
-    wq = np.array([real_to_q1_15(random.uniform(-0.9, 0.9)) for _ in range(E * E)], dtype=np.int16).reshape(E, E)
-    wk = np.array([real_to_q1_15(random.uniform(-0.9, 0.9)) for _ in range(E * E)], dtype=np.int16).reshape(E, E)
-    wv = np.array([real_to_q1_15(random.uniform(-0.9, 0.9)) for _ in range(E * E)], dtype=np.int16).reshape(E, E)
-    wo = np.array([real_to_q1_15(random.uniform(-0.9, 0.9)) for _ in range(E * E)], dtype=np.int16).reshape(E, E)
+    x = np.array([real_to_q1_15(random.uniform(-1, 1-2**-15)) for _ in range(L * E)], dtype=np.int16).reshape(L * N, E)
+    wq = np.array([real_to_q1_15(random.uniform(-1, 1-2**-15)) for _ in range(E * E)], dtype=np.int16).reshape(E, E)
+    wk = np.array([real_to_q1_15(random.uniform(-1, 1-2**-15)) for _ in range(E * E)], dtype=np.int16).reshape(E, E)
+    wv = np.array([real_to_q1_15(random.uniform(-1, 1-2**-15)) for _ in range(E * E)], dtype=np.int16).reshape(E, E)
+    wo = np.array([real_to_q1_15(random.uniform(-1, 1-2**-15)) for _ in range(E * E)], dtype=np.int16).reshape(E, E)
     return x, wq, wk, wv, wo
 
 # ----------------------
 # Run test and compare with intermediate assertions
 # ----------------------
-async def run_test(dut, x, wq, wk, wv, wo, test_name):
+async def run_test(dut, x, wq, wk, wv, wo, test_name, b=0):
     dut._log.info(f"Starting test: {test_name}")
     
     # Drive inputs and wait for completion
@@ -391,7 +391,7 @@ async def run_test(dut, x, wq, wk, wv, wo, test_name):
 
     # Check final output
     out_dut = read_dut_array(dut.out, L * E, (L, E))
-    np.save(f"../verilog_out/self_attention_out.npy", out_dut)
+    np.save(f"../verilog_out/self_attention_out_{b}.npy", out_dut)
     for i in range(L):
         for j in range(E):
             out_actual = q1_15_to_real(out_dut[i, j])
@@ -419,14 +419,15 @@ async def test_generate_for_colab(dut):
 
     await reset_dut(dut)
 
-    wq = np.load(f"../verilog_inputs/wq_np.npy")
-    wk = np.load(f"../verilog_inputs/wk_np.npy")
-    wv = np.load(f"../verilog_inputs/wv_np.npy")
-    wo = np.load(f"../verilog_inputs/wo_np.npy")
+    wq = np.load(f"../verilog_inputs/wq_np.npy").reshape(E, E).astype(np.int16)
+    wk = np.load(f"../verilog_inputs/wk_np.npy").reshape(E, E).astype(np.int16)
+    wv = np.load(f"../verilog_inputs/wv_np.npy").reshape(E, E).astype(np.int16)
+    wo = np.load(f"../verilog_inputs/wo_np.npy").reshape(E, E).astype(np.int16)
 
     for b in range(10):
-        x = np.load(f"../verilog_inputs/x_ln_np_{b}.npy")
-        await run_test(dut, x, wq, wk, wv, wo, "Actual Input")
+        x = np.load(f"../verilog_inputs/x_ln_np_{b}.npy").reshape(L*N, E).astype(np.int16)
+        await run_test(dut, x, wq, wk, wv, wo, "Actual Input", b)
+        await reset_dut(dut)
 
 
 # ----------------------
@@ -440,10 +441,10 @@ async def test_self_attention_top(dut):
     await reset_dut(dut)
 
     # Test 1: Random matrices
-    x, wq, wk, wv, wo = generate_test_case()
-    print(x.shape)
-    await run_test(dut, x, wq, wk, wv, wo, "Random Matrices")
-    await reset_dut(dut)
+    for _ in range(100):
+        x, wq, wk, wv, wo = generate_test_case()
+        await run_test(dut, x, wq, wk, wv, wo, "Random Matrices")
+        await reset_dut(dut)
 
     # Test 2: Zero matrices
     x_zero = np.zeros((L * N, E), dtype=np.int16)
