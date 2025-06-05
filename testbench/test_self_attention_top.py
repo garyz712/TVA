@@ -65,7 +65,7 @@ def real_to_q1_7(x):
     return val & 0xFF
 
 # Constants for sqrt(8) division
-SQRT_E = np.sqrt(16.0)  # ≈ 2.828
+SQRT_E = np.sqrt(32.0)  # ≈ 2.828
 INV_SQRT_E = 1.0 / SQRT_E  # ≈ 0.354
 INV_SQRT_E_Q15 = real_to_q1_15(INV_SQRT_E)  # Hardware constant (11,600 in decimal)
 
@@ -521,6 +521,12 @@ async def test_self_attention_top(dut):
         await reset_dut(dut)
 
     dut._log.info("All tests completed.")
+
+
+
+
+
+
 
 
 
