@@ -7,13 +7,13 @@ import random
 # Parameters
 L = 16
 N = 1
-E = 16
+E = 32
 WIDTH = 16
 MAX_VAL = (1 << (WIDTH - 1)) - 1
 TOLERANCE = 0.005  # Increased tolerance due to fixed-point approximation of 1/sqrt(8)
 
 # Constants for sqrt(8) division
-SQRT_E = np.sqrt(16.0)  # ≈ 2.828
+SQRT_E = np.sqrt(32.0)  # ≈ 2.828
 INV_SQRT_E = 1.0 / SQRT_E  # ≈ 0.354
 
 # ----------------------

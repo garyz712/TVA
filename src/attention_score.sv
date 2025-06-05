@@ -17,7 +17,7 @@ module attention_score #(
     parameter int DATA_WIDTH = 16,
     parameter int L = 16,
     parameter int N = 1,
-    parameter int E = 16
+    parameter int E = 32
 )(
     input  logic                        clk,
     input  logic                        rst_n,
