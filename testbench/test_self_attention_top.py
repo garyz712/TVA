@@ -65,13 +65,13 @@ def real_to_q1_7(x):
     return val & 0xFF
 
 # Constants for sqrt(8) division
-SQRT_8 = np.sqrt(8.0)  # ≈ 2.828
-INV_SQRT_8 = 1.0 / SQRT_8  # ≈ 0.354
-INV_SQRT_8_Q15 = 0x2D50  # Hardware constant (11,600 in decimal)
+SQRT_E = np.sqrt(16.0)  # ≈ 2.828
+INV_SQRT_E = 1.0 / SQRT_E  # ≈ 0.354
+INV_SQRT_E_Q15 = real_to_q1_15(INV_SQRT_E)  # Hardware constant (11,600 in decimal)
 
 def hw_multiply_inv_sqrt8(matmul_result_q30):
     matmul_signed = np.array(matmul_result_q30).astype(np.int32)
-    inv_sqrt8_signed = np.int16(INV_SQRT_8_Q15)
+    inv_sqrt8_signed = np.int16(INV_SQRT_E_Q15)
     mult_result = np.int64(matmul_signed) * np.int64(inv_sqrt8_signed)
     q30_result = (mult_result >> 15) & 0xFFFFFFFF
     if q30_result & 0x80000000:
@@ -521,6 +521,9 @@ async def test_self_attention_top(dut):
         await reset_dut(dut)
 
     dut._log.info("All tests completed.")
+
+
+
 
 
 
