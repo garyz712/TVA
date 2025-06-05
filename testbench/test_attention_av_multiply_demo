@@ -1,0 +1,174 @@
+
+import cocotb
+from cocotb.clock import Clock
+from cocotb.triggers import RisingEdge, Timer
+import numpy as np
+import os
+
+# Parameters
+A_ROWS = 16
+NUM_COLS = 16
+V_COLS = 32
+TILE_SIZE = 8
+NUM_TILES = V_COLS // TILE_SIZE  # 4
+CYCLES_INT4 = 1
+CYCLES_INT8 = 2
+CYCLES_FP16 = 4
+TOLERANCE = 0.001  # FP16 tolerance for Q1.15
+
+# Helper functions 
+
+def real_to_q1_15(x):
+    val = int(x * (2**15))
+    if val > 32767:
+        val = 32767
+    if val < -32768:
+        val = -32768
+    # Explicitly cast to np.int16 to handle overflow
+    return np.array(val).astype(np.int16)
+
+def q1_15_to_real(x):
+    value = np.array(int(x) & 0xFFFF).astype(np.int16)
+    return float(value) / (2**15)
+
+def real_to_q1_7(x):
+    val = int(x * (2**7))
+    if val > 127:
+        val = 127
+    if val < -128:
+        val = -128
+    return val & 0xFF
+
+def real_to_q1_3(x):
+    val = int(x * (2**3))
+    if val > 7:
+        val = 7
+    if val < -8:
+        val = -8
+    return val & 0xF
+
+def nibble_to_real_q1_3(n):
+    n &= 0xF
+    if n & 0x8:
+        n -= 0x10
+    return float(n) / (2**3)
+
+
+def compute_expected(a_mem, v_mem, precision_sel):
+    expected_out = np.zeros((A_ROWS, V_COLS), dtype=float)
+    for k in range(NUM_COLS):
+        prec = precision_sel[k]
+        for i in range(A_ROWS):
+            raw_a = int(a_mem[i, k])
+            if prec == 0:  # INT4
+                a_val = nibble_to_real_q1_3(raw_a >> 12)
+            elif prec == 1:  # INT8
+                # Extract bits [15:8] as an 8-bit signed integer
+                a_val = float(np.array((raw_a & 0xFF00) >> 8).astype(np.int8)) / (2**7)
+            else:  # FP16
+                a_val = q1_15_to_real(raw_a)
+            for j in range(V_COLS):
+                raw_v = int(v_mem[k, j])
+                if prec == 0:
+                    v_val = nibble_to_real_q1_3(raw_v >> 12)
+                elif prec == 1:
+                    # Extract bits [15:8] as an 8-bit signed integer
+                    v_val = float(np.array((raw_v & 0xFF00) >> 8).astype(np.int8)) / (2**7)
+                else:
+                    v_val = q1_15_to_real(raw_v)
+                expected_out[i, j] += a_val * v_val
+                expected_out[i, j] = np.clip(expected_out[i, j], -2.0, 1.999999999)
+    expected_q = np.vectorize(real_to_q1_15)(np.clip(expected_out, -1.0, 0.999969))
+    return expected_q.astype(np.int16)
+
+async def verify_output(dut, expected_out):
+    errors = 0
+    for i in range(A_ROWS):
+        for j in range(V_COLS):
+            index = i * V_COLS + j
+            try:
+                actual = q1_15_to_real(dut.out_mem[index].value)
+                expected = q1_15_to_real(expected_out[i, j])
+                diff = actual - expected
+                if abs(diff) > TOLERANCE:
+                    dut._log.error(f"Error at out_mem[{index}]: actual={actual}, expected={expected}")
+                    errors += 1
+                # else:
+                #     dut._log.info(f"Output correct at out_mem[{index}]: actual={actual}, expected={expected}")
+            except Exception as e:
+                dut._log.error(f"Error accessing out_mem[{index}]: {e}")
+                errors += 1
+    if errors == 0:
+        dut._log.info("Test passed: Output matches expected.")
+    else:
+        dut._log.error(f"Test failed: {errors} errors found.")
+    return errors
+
+
+async def save_output(dut, index):
+    os.makedirs("verilog_outputs", exist_ok=True)
+    out_mem = np.zeros((A_ROWS, V_COLS), dtype=np.int16)
+    for i in range(A_ROWS):
+        for j in range(V_COLS):
+            idx = i * V_COLS + j
+            try:
+                out_mem[i, j] = dut.out_mem[idx].value
+            except Exception as e:
+                print(f"Error accessing out_mem[{idx}]: {e}")
+    np.save(f"verilog_outputs/out_mem_{index}.npy", out_mem)
+    print(f"Saved hardware output to verilog_outputs/out_mem_{index}.npy")
+
+async def reset_dut(dut):
+    dut.rst_n.value = 0
+    dut.start.value = 0
+    await Timer(20, units="ns")
+    dut.rst_n.value = 1
+    await Timer(10, units="ns")
+
+async def run_test_case(dut, a_mem, v_mem, precision_sel, index):
+    print(f"\nTest Case {index}: PyTorch Input")
+    for k in range(NUM_COLS):
+        dut.precision_sel[k].value = int(precision_sel[k])
+        for i in range(A_ROWS):
+            index_a = i * NUM_COLS + k
+            dut.a_mem[index_a].value = int(a_mem[i, k])
+        for j in range(V_COLS):
+            index_v = k * V_COLS + j
+            dut.v_mem[index_v].value = int(v_mem[k, j])
+    print(f"Inputs assigned for test {index}")
+
+        # Compute expected output
+    expected_out = compute_expected(a_mem, v_mem, precision_sel)
+
+    dut.start.value = 1
+    await RisingEdge(dut.clk)
+    dut.start.value = 0
+    await RisingEdge(dut.done)
+    await RisingEdge(dut.clk)
+    await Timer(10, units="ns")
+
+    await save_output(dut, index)
+
+    errors = await verify_output(dut, expected_out)
+    return errors
+
+@cocotb.test()
+async def test_attention_av_multiply(dut):
+    os.environ["VERILATOR_VCD"] = "1"
+    clock = Clock(dut.clk, 10, units="ns")  # 100 MHz
+    cocotb.start_soon(clock.start())
+
+    await reset_dut(dut)
+
+    input_dir = "verilog_inputs"
+    for i in range(10):
+        if not os.path.exists(f"{input_dir}/att_np_{i}.npy"):
+            print(f"No more inputs found at index {i}")
+            break
+        a_mem = np.load(f"{input_dir}/att_np_{i}.npy")
+        v_mem = np.load(f"{input_dir}/v_np_{i}.npy")
+        precision_sel = np.load(f"{input_dir}/prec_sel_{i}.npy")
+        await run_test_case(dut, a_mem, v_mem, precision_sel, i)
+        await reset_dut(dut)
+
+    print("All hardware tests completed.")
