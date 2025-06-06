@@ -88,10 +88,10 @@ Result:
 ## Performance Highlights
 
 | Metric                         | Estimate               |
-|-------------------------------|------------------------|
-| Logic Resource Usage          | ~50,000 logic cells    |
+|-------------------------------|-------------------------|
+| Logic Resource Usage          | ~50,000 logic cells     |
 | Max Precision Support         | INT16                   |
-| Power Savings                 | 2×–3× over uniform INT16 |
+| Accuracy Drop                 | 0.05% on MNIST          |
 | Speedup vs Dense FP Baseline  | 2.5×–4× (application-dependent) |
 | Precision Switching Latency   | < 1 cycle (pipeline-driven) |
 
