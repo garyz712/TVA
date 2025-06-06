@@ -129,7 +129,12 @@ Result:
   
       !zip -r verilog_inputs.zip verilog_inputs
 - download the zip file, and unzip locally at TVA/testbench
-- Make sure the testbench/makefile includes all modules you want to test
+- Install required module
+
+      pip install cocotb numpy
+      apt install verilator # or use your preferred package manager to install your preferred simulator
+
+- Modify the testbench/makefile file to match the file sources, test module top-level, and testbench filename
 - Compile Verilog modules using your preferred simulator (e.g. Verilator)
   
       cd TVA/testbench
