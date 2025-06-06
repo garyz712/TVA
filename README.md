@@ -114,6 +114,9 @@ Result:
 - Run the 2.1 block (QAT) to get preprocessed image/weight input (in verilog_inputs folder) for TVA, this might takes a while for training.
 - Run the 2.2 block to evaluation TVA on MNIST: Accuracy = 99.86% (-0.05% drop)
 
+<p align="center">
+<img src=".\images\accuracy" width="1000"/>
+</p>
 
 ### 2. TVA Self-Attention Hardware Simulation 
 - Run on colab
