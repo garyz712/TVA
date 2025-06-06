@@ -94,6 +94,9 @@ Result:
 | Accuracy Drop                 | 0.05% on MNIST          |
 | TVA Speedup vs Dense FP Baseline  | 30-60% (input-dependent) |
 | Precision Switching Latency   | 50 cycles (for #tokens=16) |
+| INT 16 Multiplication  | 4 cycles  |
+| INT 8 Multiplication  | 2 cycles  |
+| INT 4 Multiplication  | 1 cycles  |
 
 ---
 
