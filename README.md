@@ -4,7 +4,7 @@
 
 This project proposes a novel **Token-wise mixed-precision Vision-Transformer Accelerator** on **FPGA**, specifically targeting **Vision Transformer (ViT) and LLMs** workloads. The architecture adaptively assigns **arithmetic precision per token** based on attention score importance, enabling significant **compute efficiency**, **interpretability** and **power savings**, especially for **real-time or edge AI applications**.
 
-Unlike standard GPU implementations (e.g., FlashAttention) that rely on uniform precision GEMM operations, TVA leverages **outer-product-based computation** and **dynamic quantization**, making it highly optimized for streaming and resource-constrained environments like FPGAs.
+Unlike standard GPU implementations (e.g., FlashAttention) that rely on uniform precision GEMM operations, TVA leverages **outer-product-based computation** and **dynamic quantization**, making it highly optimized for processing long sequences or large images in resource-constrained environments like FPGAs.
 
 ---
 
@@ -106,17 +106,24 @@ Result:
 
 ## Usage Instructions
 
-### 1. Simulation (recommended first test)
+### 0. Check the Original ViT Performance 
+- **[Checkout the notebook for Quantization Aware Training and Post Training Quantization for TVA](https://colab.research.google.com/drive/1kMJykQPWpzSrSdFVy_d5k_uMILESneGC?usp=sharing)**
+- Run the first block to get the original ViT performance on MNIST dataset with full percision -> Accuracy: 99.91%
+
+### 1. Quantization Aware Training
+- Run the second block to get image input for TVA: TVA Self-Attention Layer Quantization Aware Training and Testing DEMO
+
+### 2. Simulation (recommended first test)
 - Compile Verilog modules using your preferred simulator (e.g. Verilator, Vivado/XSIM).
 - Provide patch embeddings and QKV vectors as `*.npy` or memory initialization files.
 - Simulate and dump outputs to verify outer-product attention logic.
 
-### 2. On-Hardware Deployment (Optional: Artix-7 FPGA)
+### 3. On-Hardware Deployment (Optional: Artix-7 FPGA)
 - Load `bitstream` to FPGA using Vivado.
 - Ensure DDR3/DDR4 memory interface is configured and connected.
 - Use host driver to push input image and receive output embeddings.
 
-### 3. Visualization (Optional)
+### 4. Visualization (Optional)
 - Use testbench Python utilities (`tva_testbench.py`) to:
   - Visualize attention maps per token.
   - Compare INT16 vs INT4/INT8 token assignments.
@@ -135,4 +142,4 @@ TVA: a novel Token-aware Vision-transformer Accelerator. This is an outer-produc
 <img src=".\images\demo_evaluation.png" width="1000"/>
 </p>
 
-**[Checkout the notebook for Quantization Aware Training and Post Training Quantization for TVA](https://colab.research.google.com/drive/1kMJykQPWpzSrSdFVy_d5k_uMILESneGC?usp=sharing)**
+
