@@ -116,9 +116,9 @@ Result:
 - 
 
 ### 2. Simulation (recommended first test)
-   cd TVA/testbench
-   make clean
-   make
+      cd TVA/testbench
+      make clean
+      make
 - Compile Verilog modules using your preferred simulator (e.g. Verilator) by running 
 - Provide patch embeddings and QKV vectors as `*.npy` or memory initialization files.
 - Simulate and dump outputs to verify outer-product attention logic.
