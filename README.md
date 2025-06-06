@@ -2,7 +2,7 @@
 
 ## Summary
 
-This project implements a **token-wise mixed-precision Transformer accelerator** on **FPGA**, specifically targeting **Vision Transformer (ViT)** workloads. The architecture adaptively assigns **arithmetic precision per token** based on attention score importance, enabling significant **power savings**, **compute efficiency**, and **interpretability**, especially for **real-time or edge AI applications**.
+This project implements a **token-wise mixed-precision Transformer accelerator** on **FPGA**, specifically targeting **Vision Transformer (ViT) and LLMs** workloads. The architecture adaptively assigns **arithmetic precision per token** based on attention score importance, enabling significant **power savings**, **compute efficiency**, and **interpretability**, especially for **real-time or edge AI applications**.
 
 Unlike standard GPU implementations (e.g., FlashAttention) that rely on uniform precision GEMM operations, TVA leverages **outer-product-based computation** and **dynamic quantization**, making it highly optimized for streaming and resource-constrained environments like FPGAs.
 
