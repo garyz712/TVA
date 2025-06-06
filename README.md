@@ -16,7 +16,7 @@ ViTs are state-of-the-art in many computer vision tasks but are compute- and mem
 - Static memory access and data reuse inefficiencies.
 
 TVA addresses these issues through:
-- **Token-aware precision adaptation**, using INT4, INT8, or FP16 depending on token importance.
+- **Token-aware precision adaptation**, using INT4, INT8, or INT16 depending on token importance.
 - **Outer-product attention**, improving V-vector reuse and avoiding dense GEMMs.
 - **FPGA-specific optimizations**, leveraging DSPs, BRAM, and pipelined MAC units for high-throughput low-latency execution.
 
@@ -24,10 +24,10 @@ TVA addresses these issues through:
 
 ## Key Features
 
-- ✅ **Mixed-Precision Execution**: Dynamically chooses INT4, INT8, or FP16 MAC paths.
+- ✅ **Mixed-Precision Execution**: Dynamically chooses INT4, INT8, or INT16 MAC paths.
 - ✅ **Token-Level Adaptation**: Based on attention column statistics (e.g., sum or entropy).
 - ✅ **Outer-Product Attention**: Enables data reuse and precision assignment per token.
-- ✅ **FP16 Accumulation**: Ensures numerical consistency across token precisions.
+- ✅ **INT16 Accumulation**: Ensures numerical consistency across token precisions.
 - ✅ **Streamed Architecture**: Suited for pipelined execution and memory-efficient inference.
 - ✅ **Configurable for Vision Tasks**: Designed to support ViT-based classification and detection pipelines.
 
@@ -45,8 +45,8 @@ TVA addresses these issues through:
 | Component                  | Description |
 |---------------------------|-------------|
 | Precision Analyzer        | Computes per-token importance (e.g., column sum) and assigns quantization level. |
-| Adaptive MAC Units        | Dedicated INT4 (Q1.3), INT8 (Q1.7), and FP16 multiply-accumulate datapaths. |
-| FP16 Accumulator          | Aggregates outer-product results for all tokens using a unified precision. |
+| Adaptive MAC Units        | Dedicated INT4 (Q1.3), INT8 (Q1.7), and INT16 (Q1.15) multiply-accumulate datapaths. |
+| INT16 Accumulator          | Aggregates outer-product results for all tokens using a unified precision. |
 | Memory Controller         | Manages bandwidth-efficient access to external DDR and on-chip BRAMs. |
 | MLP Processing Pipeline   | Applies fully-connected ViT MLPs post-attention using streaming-friendly logic. |
 
@@ -58,14 +58,14 @@ TVA addresses these issues through:
 Each column corresponds to one token with per-token quantization:
 - A[:,0] → INT4 (Q1.3)
 - A[:,1] → INT8 (Q1.7)
-- A[:,2] → FP16
+- A[:,2] → INT16 (Q1.15)
 
 **Value Matrix (V, size 3×2):**
 - V[0], V[1], V[2] reused across A's columns via outer-products.
 
 Result:
 - Outer-products: `A[:,i] ⊗ V[i,:]`, scaled by token precision.
-- Final outputs are accumulated in FP16.
+- Final outputs are accumulated in INT16.
 
 ---
 
@@ -79,7 +79,7 @@ Result:
    - Outer-product executed with dynamic MAC unit.
 3. **MLP Layer**:
    - Output vectors passed through hardware MLP (in BRAM/DDR).
-   - Fully-pipelined arithmetic (primarily FP16).
+   - Fully-pipelined arithmetic (primarily INT16).
 4. **Result Output**:
    - Stored back to DDR (e.g., logits, bounding boxes, embeddings).
 
@@ -90,8 +90,8 @@ Result:
 | Metric                         | Estimate               |
 |-------------------------------|------------------------|
 | Logic Resource Usage          | ~50,000 logic cells    |
-| Max Precision Support         | FP16                   |
-| Power Savings                 | 2×–3× over uniform FP16 |
+| Max Precision Support         | INT16                   |
+| Power Savings                 | 2×–3× over uniform INT16 |
 | Speedup vs Dense FP Baseline  | 2.5×–4× (application-dependent) |
 | Precision Switching Latency   | < 1 cycle (pipeline-driven) |
 
@@ -126,7 +126,7 @@ Result:
 ### 3. Visualization (Optional)
 - Use testbench Python utilities (`tva_testbench.py`) to:
   - Visualize attention maps per token.
-  - Compare FP16 vs INT4/INT8 token assignments.
+  - Compare INT16 vs INT4/INT8 token assignments.
   - Evaluate classification/detection accuracy.
 
 ---
