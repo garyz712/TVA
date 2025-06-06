@@ -189,10 +189,10 @@ Result:
 
 ---
 
-## Build Artifacts
+## Future Work
 
 
-TVA: a novel Token-aware Vision-transformer Accelerator. This is an outer-product-based attention inference engine with token-importance-driven mixed-precision quantization, processing each token with unique precision and latency. This approach can be extended to all layers to increase speedup ratio (instead assign each attention row with a unique precision based on corresponding column sum for each token then do mixed precision inference for MLP). 
+TVA is a novel Token-aware Vision-transformer Accelerator. This is an outer-product-based attention inference engine with token-importance-driven mixed-precision quantization, processing each token with unique precision and latency. This approach can be extended to all layers to increase speedup ratio (instead assign each attention row with a unique precision based on corresponding column sum for each token then do mixed precision inference for MLP). 
 
 
 
