@@ -87,7 +87,7 @@ Result:
    - Stored back to DDR (e.g., logits, bounding boxes, embeddings).
    - 
 <p align="center">
-<img src=".\images\TVA_architect" width="1000"/>
+<img src=".\images\TVA_architect.png" width="1000"/>
 </p>
 ---
 
