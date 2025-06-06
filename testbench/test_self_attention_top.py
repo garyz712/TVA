@@ -6,6 +6,7 @@ from cocotb.clock import Clock
 from cocotb.triggers import RisingEdge, Timer
 import numpy as np
 import random
+import os
 
 # Parameters matching self_attention_top
 DATA_WIDTH = 16
@@ -391,7 +392,8 @@ async def run_test(dut, x, wq, wk, wv, wo, test_name, b=0):
 
     # Check final output
     out_dut = read_dut_array(dut.out, L * E, (L, E))
-    np.save(f"../verilog_out/self_attention_out_{b}.npy", out_dut)
+    os.makedirs(f"../verilog_outputs", exist_ok=True)
+    np.save(f"../verilog_outputs/self_attention_out_{b}.npy", out_dut)
     for i in range(L):
         for j in range(E):
             out_actual = q1_15_to_real(out_dut[i, j])
