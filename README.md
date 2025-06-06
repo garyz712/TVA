@@ -2,7 +2,7 @@
 
 ## Summary
 
-This project implements a **Token-wise mixed-precision Vision-Transformer Accelerator** on **FPGA**, specifically targeting **Vision Transformer (ViT) and LLMs** workloads. The architecture adaptively assigns **arithmetic precision per token** based on attention score importance, enabling significant **power savings**, **compute efficiency**, and **interpretability**, especially for **real-time or edge AI applications**.
+This project proposes a novel **Token-wise mixed-precision Vision-Transformer Accelerator** on **FPGA**, specifically targeting **Vision Transformer (ViT) and LLMs** workloads. The architecture adaptively assigns **arithmetic precision per token** based on attention score importance, enabling significant **compute efficiency**, **interpretability** and **power savings**, especially for **real-time or edge AI applications**.
 
 Unlike standard GPU implementations (e.g., FlashAttention) that rely on uniform precision GEMM operations, TVA leverages **outer-product-based computation** and **dynamic quantization**, making it highly optimized for streaming and resource-constrained environments like FPGAs.
 
@@ -10,15 +10,16 @@ Unlike standard GPU implementations (e.g., FlashAttention) that rely on uniform 
 
 ## Motivation
 
-ViTs are state-of-the-art in many computer vision tasks but are compute- and memory-heavy. Edge deployment of ViTs is often infeasible due to:
+ViTs and transfromer are state-of-the-art in many computer vision and natural language processing tasks but are compute- and memory-heavy. Edge deployment of ViTs in full precision for all tokens is often slow and unnecessary due to:
+- Token importance Sparsity (only a few tokens are important in a long sequence),
 - Uniform high-precision computation (e.g., FP32),
 - GEMM-centric attention implementations,
 - Static memory access and data reuse inefficiencies.
 
 TVA addresses these issues through:
 - **Token-aware precision adaptation**, using INT4, INT8, or INT16 depending on token importance.
-- **Outer-product attention**, improving V-vector reuse and avoiding dense GEMMs.
-- **FPGA-specific optimizations**, leveraging DSPs, BRAM, and pipelined MAC units for high-throughput low-latency execution.
+- **Outer-product attention**, improving alignment of importance-driven Matrix Multiplications.
+- **FPGA-specific optimizations**, leveraging DSPs, BRAM, and pipelined MAC units for high-throughput flexible low-latency execution.
 
 ---
 
@@ -27,7 +28,8 @@ TVA addresses these issues through:
 - ✅ **Mixed-Precision Execution**: Dynamically chooses INT4, INT8, or INT16 MAC paths.
 - ✅ **Token-Level Adaptation**: Based on attention column statistics (e.g., sum or entropy).
 - ✅ **Outer-Product Attention**: Enables data reuse and precision assignment per token.
-- ✅ **INT16 Accumulation**: Ensures numerical consistency across token precisions.
+- ✅ **Tiling**: Supports arbitrary matrix sizes using memory tiling.
+- ✅ **INT32 Accumulation**: Ensures numerical consistency across token precisions.
 - ✅ **Streamed Architecture**: Suited for pipelined execution and memory-efficient inference.
 - ✅ **Configurable for Vision Tasks**: Designed to support ViT-based classification and detection pipelines.
 
