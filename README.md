@@ -47,7 +47,7 @@ TVA addresses these issues through:
 | Component                  | Description |
 |---------------------------|-------------|
 | Precision Analyzer        | Computes per-token importance (e.g., column sum) and assigns quantization level. |
-| Adaptive MAC Units        | Dedicated INT4 (Q1.3), INT8 (Q1.7), and INT16 (Q1.15) multiply-accumulate datapaths. |
+| Adaptive MAC Units        | Dedicated INT4 (Q1.3), INT8 (Q1.7), and INT16 (Q1.15) multiply-accumulate datapaths with various latency. |
 | INT32 Accumulator          | Aggregates outer-product results for all tokens using a unified precision. |
 | Memory Controller (TBD)         | Manages bandwidth-efficient access to external DDR and on-chip BRAMs. |
 | Relu-like Softmax   | Applies Relu-style Softmax module to avoid expensive exponential computation. |
@@ -64,11 +64,11 @@ Each column corresponds to one token with per-token quantization:
 - A[:,2] → INT16 (Q1.15)
 
 **Value Matrix (V, size 3×2):**
-- V[0], V[1], V[2] reused across A's columns via outer-products.
+- V[0, :], V[1, :], V[2, :] reused across A's columns via outer-products.
 
 Result:
 - Outer-products: `A[:,i] ⊗ V[i,:]`, scaled by token precision.
-- Final outputs are accumulated in INT16.
+- Final outputs are accumulated in INT32 (Q2.30) and downcast back to INT16.
 
 ---
 
