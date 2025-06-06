@@ -109,6 +109,9 @@ Result:
 ### 0. Check the Original ViT Performance 
 - **[Checkout the notebook for Quantization Aware Training and Post Training Quantization for TVA](https://colab.research.google.com/drive/1kMJykQPWpzSrSdFVy_d5k_uMILESneGC?usp=sharing)**
 - Run the first block to get the original ViT performance on MNIST dataset with full percision -> Accuracy = 99.91%
+<p align="center">
+<img src=".\images\full_accuracy.png" width="700"/>
+</p>
 
 ### 1. Quantization Aware Training and Evaluation of TVA
 - Run the 2.1 block (QAT) to get preprocessed image/weight input (in verilog_inputs folder) for TVA, this might takes a while for training.
