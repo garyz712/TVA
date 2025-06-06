@@ -97,19 +97,6 @@ Result:
 
 ---
 
-## Milestones
-
-| Date        | Milestone                                             |
-|-------------|-------------------------------------------------------|
-| April 7     | Proposal submission                                   |
-| April 14    | Finalize architecture, begin memory/controller logic  |
-| April 28    | Implement precision analyzer & adaptive MAC units     |
-| May 5       | Integrate Transformer attention with token routing    |
-| May 19      | MLP design & full pipeline integration                |
-| May 23      | Milestone 2 – Full functionality in simulation        |
-| May 26+     | Testing, documentation, demo (Artix-7 or simulation)  |
-
----
 
 ## Usage Instructions
 
