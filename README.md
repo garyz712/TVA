@@ -108,20 +108,27 @@ Result:
 
 ### 0. Check the Original ViT Performance 
 - **[Checkout the notebook for Quantization Aware Training and Post Training Quantization for TVA](https://colab.research.google.com/drive/1kMJykQPWpzSrSdFVy_d5k_uMILESneGC?usp=sharing)**
-- Run the first block to get the original ViT performance on MNIST dataset with full percision -> Accuracy: 99.91%
+- Run the first block to get the original ViT performance on MNIST dataset with full percision -> Accuracy = 99.91%
 
-### 1. Quantization Aware Training of TVA
-- Run the second block (TVA Self-Attention Layer Quantization Aware Training and Testing DEMO) to get preprocessed image/weight input (in verilog_inputs folder) for TVA, this might takes a while for training.
-- Run !zip -r verilog_inputs.zip verilog_inputs, download the zip file, and unzip locally at TVA/testbench
-- 
+### 1. Quantization Aware Training and Evaluation of TVA
+- Run the 2.1 block (QAT) to get preprocessed image/weight input (in verilog_inputs folder) for TVA, this might takes a while for training.
+- Run the 2.2 block to evaluation TVA on MNIST: Accuracy = 99.86% (-0.05% drop)
 
-### 2. Simulation (recommended first test)
+
+### 2. Hardware Simulation 
+- Run
+      !zip -r verilog_inputs.zip verilog_inputs
+- download the zip file, and unzip locally at TVA/testbench
+- Make sure the makefile includes all modules you want to test
+- Compile Verilog modules using your preferred simulator (e.g. Verilator) by running 
       cd TVA/testbench
       make clean
       make
-- Compile Verilog modules using your preferred simulator (e.g. Verilator) by running 
-- Provide patch embeddings and QKV vectors as `*.npy` or memory initialization files.
-- Simulate and dump outputs to verify outer-product attention logic.
+
+- You will see the verilog_outputs folder, zip it and upload it back to colab for output verification.
+- Run
+      !unzip -q verilog_outputs.zip
+- Run block 2.3 to evaluate the hardware output: Accuracy = 100%
 
 ### 3. On-Hardware Deployment (Optional: Artix-7 FPGA)
 - Load `bitstream` to FPGA using Vivado.
