@@ -155,7 +155,7 @@ Result:
        14820.00ns INFO     cocotb.attention_av_multiply       Test passed: Output matches expected.
       Test case 2 passed!
        14850.00ns INFO     cocotb.attention_av_multiply       
-                                                              Test Case 3: All FP16
+                                                              Test Case 3: All INT16
        14850.00ns INFO     cocotb.attention_av_multiply       Inputs assigned successfully!
        25430.00ns INFO     cocotb.attention_av_multiply       Test passed: Output matches expected.
       Test case 3 passed!
