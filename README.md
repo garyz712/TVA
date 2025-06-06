@@ -93,7 +93,7 @@ Result:
 | Max Precision Support         | INT16                   |
 | Accuracy Drop                 | 0.05% on MNIST          |
 | TVA Speedup vs Dense FP Baseline  | 30-60% (input-dependent) |
-| Precision Switching Latency   | < 1 cycle (pipeline-driven) |
+| Precision Switching Latency   | 50 cycles (for #tokens=16) |
 
 ---
 
