@@ -110,8 +110,10 @@ Result:
 - **[Checkout the notebook for Quantization Aware Training and Post Training Quantization for TVA](https://colab.research.google.com/drive/1kMJykQPWpzSrSdFVy_d5k_uMILESneGC?usp=sharing)**
 - Run the first block to get the original ViT performance on MNIST dataset with full percision -> Accuracy: 99.91%
 
-### 1. Quantization Aware Training
-- Run the second block to get image input for TVA: TVA Self-Attention Layer Quantization Aware Training and Testing DEMO
+### 1. Quantization Aware Training of TVA
+- Run the second block to get preprocessed image/weight input (in verilog_inputs folder) for TVA: TVA Self-Attention Layer Quantization Aware Training and Testing DEMO
+- Run !zip -r verilog_inputs.zip verilog_inputs, download the zip file and unzip locally
+- 
 
 ### 2. Simulation (recommended first test)
 - Compile Verilog modules using your preferred simulator (e.g. Verilator, Vivado/XSIM).
