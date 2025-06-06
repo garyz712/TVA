@@ -2,7 +2,7 @@
 
 ## Summary
 
-This project proposes a novel **Token-wise mixed-precision Vision-Transformer Accelerator** on **FPGA**, specifically targeting **Vision Transformer (ViT) and LLMs** workloads. The architecture adaptively assigns **arithmetic precision per token** based on attention score importance, enabling significant **compute efficiency**, **interpretability** and **power savings**, especially for **real-time or edge AI applications**.
+This research project proposes a novel **Token-wise mixed-precision Vision-Transformer Accelerator** on **FPGA**, specifically targeting **Vision Transformer (ViT) and LLMs** workloads. The architecture adaptively assigns **arithmetic precision per token** based on attention score importance, enabling significant **compute efficiency**, **interpretability** and **power savings**, especially for **real-time or edge AI applications**.
 
 Unlike standard GPU implementations (e.g., FlashAttention) that rely on uniform precision GEMM operations, TVA leverages **outer-product-based computation** and **dynamic quantization**, making it highly optimized for processing long sequences or large images in resource-constrained environments like FPGAs.
 
@@ -182,10 +182,11 @@ Result:
 ## Build Artifacts
 
 
-TVA: a novel Token-aware Vision-transformer Accelerator. This is an outer-product-based attention inference engine with token-importance-driven mixed-precision quantization, processing each token with unique precision and latency.
+TVA: a novel Token-aware Vision-transformer Accelerator. This is an outer-product-based attention inference engine with token-importance-driven mixed-precision quantization, processing each token with unique precision and latency. This approach can be extended to all layers to increase speedup ratio. 
 
 <p align="center">
 <img src=".\images\demo_evaluation.png" width="1000"/>
 </p>
 
-
+## Acknowledgement
+This research is conducted at California Institute of Technology (Caltech). We thank Professor Glen George for FPGA resources support.
