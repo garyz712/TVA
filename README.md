@@ -96,7 +96,7 @@ Result:
 | Max Precision Support         | INT16                   |
 | Accuracy Drop                 | 0.05% on MNIST dataset         |
 | TVA Speedup vs Dense FP Baseline  | 30-60% (input-dependent) |
-| Precision Switching Latency   | 50 cycles (for #tokens=16) |
+| Precision Switching Latency   | 50 cycles (negligible for full implementation) |
 | INT 16 Multiplication  | 4 cycles  |
 | INT 8 Multiplication  | 2 cycles  |
 | INT 4 Multiplication  | 1 cycles  |
@@ -107,7 +107,7 @@ Result:
 ## Usage Instructions
 
 ### 1. Simulation (recommended first test)
-- Compile Verilog modules using your preferred simulator (e.g. Vivado/XSIM, Verilator).
+- Compile Verilog modules using your preferred simulator (e.g. Verilator, Vivado/XSIM).
 - Provide patch embeddings and QKV vectors as `*.npy` or memory initialization files.
 - Simulate and dump outputs to verify outer-product attention logic.
 
