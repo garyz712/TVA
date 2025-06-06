@@ -85,7 +85,10 @@ Result:
    - Fully-pipelined arithmetic (primarily INT16).
 4. **Result Output**:
    - Stored back to DDR (e.g., logits, bounding boxes, embeddings).
-
+   - 
+<p align="center">
+<img src=".\images\TVA_architect" width="1000"/>
+</p>
 ---
 
 ## Performance Highlights
