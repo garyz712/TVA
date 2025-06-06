@@ -164,7 +164,7 @@ Result:
        25460.00ns INFO     cocotb.attention_av_multiply       Inputs assigned successfully!
        33640.00ns INFO     cocotb.attention_av_multiply       Test passed: Output matches expected.
 
-- If you want to test the Post Training Quantization accuracy, feel free to run block 3 in the colab like before, but the PTQ accuracy drop is minimum for this module but it can increases as you add more TVA modules, thus QAT is more recommended!
+- If you want to test the Post Training Quantization accuracy, feel free to run block 3 in the colab like before, the PTQ accuracy drop is minimum for this module but it can increases as you add more TVA modules, thus QAT is more recommended!
   
 ### 4. On-Hardware Deployment (Optional: Artix-7 FPGA)
 - Load `bitstream` to FPGA using Vivado.
