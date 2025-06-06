@@ -392,8 +392,8 @@ async def run_test(dut, x, wq, wk, wv, wo, test_name, b=0):
 
     # Check final output
     out_dut = read_dut_array(dut.out, L * E, (L, E))
-    os.makedirs(f"../verilog_outputs", exist_ok=True)
-    np.save(f"../verilog_outputs/self_attention_out_{b}.npy", out_dut)
+    os.makedirs("verilog_outputs", exist_ok=True)
+    np.save(f"verilog_outputs/self_attention_out_{b}.npy", out_dut)
     for i in range(L):
         for j in range(E):
             out_actual = q1_15_to_real(out_dut[i, j])
@@ -421,13 +421,13 @@ async def test_generate_for_colab(dut):
 
     await reset_dut(dut)
 
-    wq = np.load(f"../verilog_inputs/wq_np.npy").reshape(E, E).astype(np.int16)
-    wk = np.load(f"../verilog_inputs/wk_np.npy").reshape(E, E).astype(np.int16)
-    wv = np.load(f"../verilog_inputs/wv_np.npy").reshape(E, E).astype(np.int16)
-    wo = np.load(f"../verilog_inputs/wo_np.npy").reshape(E, E).astype(np.int16)
+    wq = np.load(f"verilog_inputs/wq_np.npy").reshape(E, E).astype(np.int16)
+    wk = np.load(f"verilog_inputs/wk_np.npy").reshape(E, E).astype(np.int16)
+    wv = np.load(f"verilog_inputs/wv_np.npy").reshape(E, E).astype(np.int16)
+    wo = np.load(f"verilog_inputs/wo_np.npy").reshape(E, E).astype(np.int16)
 
     for b in range(10):
-        x = np.load(f"../verilog_inputs/x_ln_np_{b}.npy").reshape(L*N, E).astype(np.int16)
+        x = np.load(f"verilog_inputs/x_ln_np_{b}.npy").reshape(L*N, E).astype(np.int16)
         await run_test(dut, x, wq, wk, wv, wo, "Actual Input", b)
         await reset_dut(dut)
 
@@ -543,6 +543,9 @@ async def test_self_attention_top(dut):
         await reset_dut(dut)
 
     dut._log.info("All tests completed.")
+
+
+
 
 
 
