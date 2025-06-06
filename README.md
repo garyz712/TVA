@@ -89,7 +89,7 @@ Result:
 
 | Metric                         | Estimate               |
 |-------------------------------|-------------------------|
-| Logic Resource Usage          | ~50,000 logic cells     |
+| Logic Resource Usage          | ~33,000 logic cells     |
 | Max Precision Support         | INT16                   |
 | Accuracy Drop                 | 0.05% on MNIST          |
 | TVA Speedup vs Dense FP Baseline  | 30-60% (input-dependent) |
