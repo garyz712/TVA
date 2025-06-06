@@ -115,30 +115,60 @@ Result:
 - Run the 2.2 block to evaluation TVA on MNIST: Accuracy = 99.86% (-0.05% drop)
 
 
-### 2. Hardware Simulation 
-- Run
+### 2. TVA Self-Attention Hardware Simulation 
+- Run on colab
   
       !zip -r verilog_inputs.zip verilog_inputs
 - download the zip file, and unzip locally at TVA/testbench
-- Make sure the makefile includes all modules you want to test
-- Compile Verilog modules using your preferred simulator (e.g. Verilator) by running
+- Make sure the testbench/makefile includes all modules you want to test
+- Compile Verilog modules using your preferred simulator (e.g. Verilator)
   
       cd TVA/testbench
       make clean
       make
+      make
 
 - You will see the verilog_outputs folder, zip it and upload it back to colab for output verification.
-- Run
+- Run on colab
   
       !unzip -q verilog_outputs.zip
 - Run block 2.3 to evaluate the hardware output: Accuracy = 100%
-
-### 3. On-Hardware Deployment (Optional: Artix-7 FPGA)
+- 
+### 3. TVA Speed Up Ratio
+- To see how dynamic precision affects the inference speed, we could run test_attention_av_multiply_demo as an example. Note: this acceleration approach can be applied to all layers in the future except for QKV generator for larger speedup
+- Change the testbench/makefile to include the attention av multiply as TOPLEVEL and MODULE
+- Compile Verilog modules using your preferred simulator (e.g. Verilator)
+  
+      cd TVA/testbench
+      make clean
+      make
+      make
+- You will see the inference time for different precision like:
+                                                          Test Case 1: All INT4
+          30.00ns INFO     cocotb.attention_av_multiply       Inputs assigned successfully!
+        6770.00ns INFO     cocotb.attention_av_multiply       Test passed: Output matches expected.
+      Test case 1 passed!
+        6800.00ns INFO     cocotb.attention_av_multiply       
+                                                              Test Case 2: All INT8
+        6800.00ns INFO     cocotb.attention_av_multiply       Inputs assigned successfully!
+       14820.00ns INFO     cocotb.attention_av_multiply       Test passed: Output matches expected.
+      Test case 2 passed!
+       14850.00ns INFO     cocotb.attention_av_multiply       
+                                                              Test Case 3: All FP16
+       14850.00ns INFO     cocotb.attention_av_multiply       Inputs assigned successfully!
+       25430.00ns INFO     cocotb.attention_av_multiply       Test passed: Output matches expected.
+      Test case 3 passed!
+       25460.00ns INFO     cocotb.attention_av_multiply       
+                                                              Test Case 4: Mixed Precision
+       25460.00ns INFO     cocotb.attention_av_multiply       Inputs assigned successfully!
+       33640.00ns INFO     cocotb.attention_av_multiply       Test passed: Output matches expected.
+  
+### 4. On-Hardware Deployment (Optional: Artix-7 FPGA)
 - Load `bitstream` to FPGA using Vivado.
 - Ensure DDR3/DDR4 memory interface is configured and connected.
 - Use host driver to push input image and receive output embeddings.
 
-### 4. Visualization (Optional)
+### 5. Visualization (Optional)
 - Use testbench Python utilities (`tva_testbench.py`) to:
   - Visualize attention maps per token.
   - Compare INT16 vs INT4/INT8 token assignments.
@@ -147,8 +177,6 @@ Result:
 ---
 
 ## Build Artifacts
-
-
 
 
 TVA: a novel Token-aware Vision-transformer Accelerator. This is an outer-product-based attention inference engine with token-importance-driven mixed-precision quantization, processing each token with unique precision and latency.
