@@ -47,7 +47,7 @@ TVA addresses these issues through:
 | Component                  | Description |
 |---------------------------|-------------|
 | Precision Analyzer        | Computes per-token importance (e.g., column sum) and assigns quantization level. |
-| Adaptive MAC Units        | Dedicated INT4 (Q1.3), INT8 (Q1.7), and INT16 (Q1.15) multiply-accumulate datapaths with various latency. |
+| Adaptive MAC Units (Mul16.sv)       | Dedicated INT4 (Q1.3), INT8 (Q1.7), and INT16 (Q1.15) multiply-accumulate datapaths with various latency. |
 | INT32 Accumulator          | Aggregates outer-product results for all tokens using a unified precision. |
 | Memory Controller (TBD)         | Manages bandwidth-efficient access to external DDR and on-chip BRAMs. |
 | Relu-like Softmax   | Applies Relu-style Softmax module to avoid expensive exponential computation. |
@@ -111,7 +111,7 @@ Result:
 - Provide patch embeddings and QKV vectors as `*.npy` or memory initialization files.
 - Simulate and dump outputs to verify outer-product attention logic.
 
-### 2. On-Hardware Deployment (Artix-7 FPGA)
+### 2. On-Hardware Deployment (Optional: Artix-7 FPGA)
 - Load `bitstream` to FPGA using Vivado.
 - Ensure DDR3/DDR4 memory interface is configured and connected.
 - Use host driver to push input image and receive output embeddings.
