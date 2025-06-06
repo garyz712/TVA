@@ -91,7 +91,7 @@ Result:
 |-------------------------------|-------------------------|
 | Logic Resource Usage          | ~33,000 logic cells     |
 | Max Precision Support         | INT16                   |
-| Accuracy Drop                 | 0.05% on MNIST          |
+| Accuracy Drop                 | 0.05% on MNIST dataset         |
 | TVA Speedup vs Dense FP Baseline  | 30-60% (input-dependent) |
 | Precision Switching Latency   | 50 cycles (for #tokens=16) |
 | INT 16 Multiplication  | 4 cycles  |
