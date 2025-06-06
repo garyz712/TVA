@@ -117,16 +117,19 @@ Result:
 
 ### 2. Hardware Simulation 
 - Run
+  
       !zip -r verilog_inputs.zip verilog_inputs
 - download the zip file, and unzip locally at TVA/testbench
 - Make sure the makefile includes all modules you want to test
-- Compile Verilog modules using your preferred simulator (e.g. Verilator) by running 
+- Compile Verilog modules using your preferred simulator (e.g. Verilator) by running
+  
       cd TVA/testbench
       make clean
       make
 
 - You will see the verilog_outputs folder, zip it and upload it back to colab for output verification.
 - Run
+  
       !unzip -q verilog_outputs.zip
 - Run block 2.3 to evaluate the hardware output: Accuracy = 100%
 
