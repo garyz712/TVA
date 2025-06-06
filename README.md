@@ -92,7 +92,7 @@ Result:
 | Logic Resource Usage          | ~50,000 logic cells     |
 | Max Precision Support         | INT16                   |
 | Accuracy Drop                 | 0.05% on MNIST          |
-| Speedup vs Dense FP Baseline  | 2.5×–4× (application-dependent) |
+| TVA Speedup vs Dense FP Baseline  | 30-60% (input-dependent) |
 | Precision Switching Latency   | < 1 cycle (pipeline-driven) |
 
 ---
