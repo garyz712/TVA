@@ -28,7 +28,7 @@ TVA addresses these issues through:
 - ✅ **Mixed-Precision Execution**: Dynamically chooses INT4, INT8, or INT16 MAC paths.
 - ✅ **Token-Level Adaptation**: Based on attention column statistics (e.g., sum or entropy).
 - ✅ **Outer-Product Attention**: Enables data reuse and precision assignment per token.
-- ✅ **Tiling**: Supports arbitrary matrix sizes using memory tiling.
+- ✅ **Tiling**: Supports arbitrary matrix sizes using efficient 16 by 16 memory tiling.
 - ✅ **INT32 Accumulation**: Ensures numerical consistency across token precisions.
 - ✅ **Streamed Architecture**: Suited for pipelined execution and memory-efficient inference.
 - ✅ **Configurable for Vision Tasks**: Designed to support ViT-based classification and detection pipelines.
