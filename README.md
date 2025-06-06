@@ -48,8 +48,9 @@ TVA addresses these issues through:
 |---------------------------|-------------|
 | Precision Analyzer        | Computes per-token importance (e.g., column sum) and assigns quantization level. |
 | Adaptive MAC Units        | Dedicated INT4 (Q1.3), INT8 (Q1.7), and INT16 (Q1.15) multiply-accumulate datapaths. |
-| INT16 Accumulator          | Aggregates outer-product results for all tokens using a unified precision. |
-| Memory Controller         | Manages bandwidth-efficient access to external DDR and on-chip BRAMs. |
+| INT32 Accumulator          | Aggregates outer-product results for all tokens using a unified precision. |
+| Memory Controller (TBD)         | Manages bandwidth-efficient access to external DDR and on-chip BRAMs. |
+| Relu-like Softmax   | Applies Relu-style Softmax module to avoid expensive exponential computation. |
 | MLP Processing Pipeline   | Applies fully-connected ViT MLPs post-attention using streaming-friendly logic. |
 
 ---
