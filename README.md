@@ -115,7 +115,7 @@ Result:
 - Run the 2.2 block to evaluation TVA on MNIST: Accuracy = 99.86% (-0.05% drop)
 
 <p align="center">
-<img src=".\images\accuracy.png" width="700"/>
+<img src=".\images\demo_accuracy.png" width="700"/>
 </p>
 
 ### 2. TVA Self-Attention Hardware Simulation 
