@@ -134,6 +134,10 @@ Result:
       !unzip -q verilog_outputs.zip
 - Run block 2.3 to evaluate the hardware output: Accuracy = 100%
   
+<p align="center">
+<img src=".\images\demo_evaluation.png" width="1000"/>
+</p>
+
 ### 3. TVA Speed Up Ratio
 - To see how dynamic precision affects the inference speed, we could run test_attention_av_multiply_demo as an example. Note: this acceleration approach can be applied to all layers in the future except for QKV generator for larger speedup
 - Change the testbench/makefile to include the attention av multiply as TOPLEVEL and MODULE
@@ -184,9 +188,7 @@ Result:
 
 TVA: a novel Token-aware Vision-transformer Accelerator. This is an outer-product-based attention inference engine with token-importance-driven mixed-precision quantization, processing each token with unique precision and latency. This approach can be extended to all layers to increase speedup ratio. 
 
-<p align="center">
-<img src=".\images\demo_evaluation.png" width="1000"/>
-</p>
+
 
 ## Acknowledgement
 This research is conducted at California Institute of Technology (Caltech). We thank Professor Glen George for FPGA resources support.
